@@ -1,0 +1,159 @@
+#!/bin/bash
+#
+# F5 Virtual Server Configuration for Consul API Gateway
+#
+# This virtual server handles external client connections and forwards to API Gateway with mTLS
+#
+# Usage: 
+#   Source this file in tmsh or execute via bash
+#   tmsh -f api-gateway-vs.tmsh
+#
+
+# Create Virtual Server for Consul API Gateway
+tmsh create ltm virtual consul-api-gateway-vs {
+    # Description
+    description "Virtual Server for Consul API Gateway with mTLS"
+    
+    # Destination (External IP and Port)
+    # Replace with your external IP address
+    destination 10.0.0.100:443
+    
+    # IP Protocol
+    ip-protocol tcp
+    
+    # Pool
+    pool consul-api-gateway-pool
+    
+    # Profiles
+    # Apply both client-side and server-side SSL profiles
+    profiles add {
+        # Client-side SSL (External clients → F5)
+        external-client-ssl {
+            context clientside
+        }
+        # Server-side SSL (F5 → API Gateway with mTLS)
+        f5-to-consul-gateway {
+            context serverside
+        }
+        # TCP profile
+        tcp {
+            context all
+        }
+        # HTTP profile (optional - for L7 features)
+        http {
+            context all
+        }
+    }
+    
+    # Source Address Translation
+    # Use automap to ensure return traffic comes back through F5
+    source-address-translation {
+        type automap
+    }
+    
+    # Source Address
+    # Restrict to specific client networks if needed
+    # source 0.0.0.0/0
+    
+    # VLANs and Tunnels
+    # Specify which VLANs this VS listens on
+    # vlans-enabled
+    # vlans add { external }
+    
+    # Connection Limit
+    # connection-limit 0
+    
+    # Connection Rate Limit
+    # rate-limit 0
+    
+    # Persistence
+    # Use source address persistence for session affinity
+    persist add {
+        source_addr {
+            default yes
+        }
+    }
+    
+    # Fallback Persistence
+    # fallback-persistence none
+    
+    # iRules (optional)
+    # Add custom iRules if needed
+    # rules add { custom-irule }
+    
+    # Policies (optional)
+    # Add LTM policies if needed
+    # policies add { custom-policy }
+    
+    # Security Log Profiles (optional)
+    # security-log-profiles add { global-network }
+    
+    # Address Status
+    # enabled or disabled
+    enabled
+    
+    # Translate Address
+    translate-address enabled
+    
+    # Translate Port
+    translate-port enabled
+}
+
+# Create iRule for logging (optional)
+tmsh create ltm rule consul-api-gateway-logging {
+    when CLIENT_ACCEPTED {
+        log local0. "Client [IP::client_addr]:[TCP::client_port] connected to [IP::local_addr]:[TCP::local_port]"
+    }
+    when SERVER_CONNECTED {
+        log local0. "Connected to backend [IP::server_addr]:[TCP::server_port] for client [IP::client_addr]"
+    }
+    when HTTP_REQUEST {
+        log local0. "HTTP Request: [HTTP::method] [HTTP::uri] from [IP::client_addr]"
+    }
+    when HTTP_RESPONSE {
+        log local0. "HTTP Response: [HTTP::status] for [IP::client_addr]"
+    }
+    when CLIENTSSL_HANDSHAKE {
+        log local0. "Client SSL handshake complete: [SSL::cipher name] [SSL::cipher version] for [IP::client_addr]"
+    }
+    when SERVERSSL_HANDSHAKE {
+        log local0. "Server SSL handshake complete: [SSL::cipher name] [SSL::cipher version] to [IP::server_addr]"
+    }
+}
+
+# Apply iRule to virtual server (optional)
+# tmsh modify ltm virtual consul-api-gateway-vs rules add { consul-api-gateway-logging }
+
+# Save configuration
+tmsh save sys config
+
+echo "✓ Virtual Server 'consul-api-gateway-vs' created successfully"
+echo ""
+echo "Virtual Server Details:"
+echo "  Name: consul-api-gateway-vs"
+echo "  Destination: 10.0.0.100:443"
+echo "  Pool: consul-api-gateway-pool"
+echo "  Client SSL Profile: external-client-ssl"
+echo "  Server SSL Profile: f5-to-consul-gateway (mTLS)"
+echo "  Persistence: source_addr"
+echo ""
+echo "Next steps:"
+echo "1. Verify the virtual server:"
+echo "   tmsh list ltm virtual consul-api-gateway-vs"
+echo ""
+echo "2. Check virtual server status:"
+echo "   tmsh show ltm virtual consul-api-gateway-vs"
+echo ""
+echo "3. View connection statistics:"
+echo "   tmsh show ltm virtual consul-api-gateway-vs detail"
+echo ""
+echo "4. Test connectivity:"
+echo "   curl -v https://10.0.0.100/api/health"
+echo ""
+echo "5. Monitor logs:"
+echo "   tail -f /var/log/ltm"
+echo ""
+echo "6. Update destination IP if needed:"
+echo "   tmsh modify ltm virtual consul-api-gateway-vs destination <new-ip>:443"
+
+# Made with Bob

@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# F5 Pool Configuration for Consul API Gateway Backend
+#
+# This pool contains the Consul API Gateway endpoints
+#
+# Usage: 
+#   Source this file in tmsh or execute via bash
+#   tmsh -f api-gateway-pool.tmsh
+#
+
+# Create Pool for Consul API Gateway
+tmsh create ltm pool consul-api-gateway-pool {
+    # Description
+    description "Pool for Consul API Gateway endpoints"
+    
+    # Load Balancing Method
+    # Options: round-robin, least-connections-member, least-connections-node, etc.
+    load-balancing-mode least-connections-member
+    
+    # Pool Members
+    # Add your API Gateway endpoints here
+    # Format: <hostname>:<port> or <ip>:<port>
+    members add {
+        api-gateway-1.openshift.example.com:443 {
+            address api-gateway-1.openshift.example.com
+            description "API Gateway Pod 1"
+        }
+        api-gateway-2.openshift.example.com:443 {
+            address api-gateway-2.openshift.example.com
+            description "API Gateway Pod 2"
+        }
+        api-gateway-3.openshift.example.com:443 {
+            address api-gateway-3.openshift.example.com
+            description "API Gateway Pod 3"
+        }
+    }
+    
+    # Health Monitor
+    # Use HTTPS monitor to verify TLS connectivity
+    monitor https_443
+    
+    # Service Down Action
+    # Options: none, reset, drop, reselect
+    service-down-action reselect
+    
+    # Slow Ramp Time
+    # Gradually increase connections to new members
+    slow-ramp-time 300
+    
+    # Reselect Tries
+    # Number of times to attempt to find a responsive member
+    reselect-tries 3
+    
+    # Priority Group Activation
+    # priority-group-activation disabled
+    
+    # Queue Settings
+    queue-on-connection-limit disabled
+    queue-depth-limit 0
+    queue-time-limit 0
+}
+
+# Create custom HTTPS health monitor (optional - more specific than default)
+tmsh create ltm monitor https consul-api-gateway-monitor {
+    description "Custom health monitor for Consul API Gateway"
+    
+    # Destination
+    defaults-from https
+    
+    # Interval and Timeout
+    interval 10
+    timeout 31
+    
+    # Send String (HTTP request)
+    send "GET /healthz HTTP/1.1\\r\\nHost: api-gateway.consul.svc.cluster.local\\r\\nConnection: Close\\r\\n\\r\\n"
+    
+    # Receive String (expected response)
+    recv "200 OK"
+    
+    # SSL Profile
+    # Use a client SSL profile if needed for health checks
+    # ssl-profile /Common/serverssl
+}
+
+# Update pool to use custom monitor
+tmsh modify ltm pool consul-api-gateway-pool {
+    monitor consul-api-gateway-monitor
+}
+
+# Save configuration
+tmsh save sys config
+
+echo "✓ Pool 'consul-api-gateway-pool' created successfully"
+echo ""
+echo "Pool Details:"
+echo "  Name: consul-api-gateway-pool"
+echo "  Load Balancing: least-connections-member"
+echo "  Monitor: consul-api-gateway-monitor"
+echo "  Members:"
+echo "    - api-gateway-1.openshift.example.com:443"
+echo "    - api-gateway-2.openshift.example.com:443"
+echo "    - api-gateway-3.openshift.example.com:443"
+echo ""
+echo "Next steps:"
+echo "1. Verify the pool:"
+echo "   tmsh list ltm pool consul-api-gateway-pool"
+echo ""
+echo "2. Check pool member status:"
+echo "   tmsh show ltm pool consul-api-gateway-pool members"
+echo ""
+echo "3. Update member addresses if needed:"
+echo "   tmsh modify ltm pool consul-api-gateway-pool members modify { <member> { address <new-address> } }"
+echo ""
+echo "4. Add/remove members:"
+echo "   tmsh modify ltm pool consul-api-gateway-pool members add { <new-member>:443 { } }"
+echo "   tmsh modify ltm pool consul-api-gateway-pool members delete { <old-member>:443 }"
+
+# Made with Bob

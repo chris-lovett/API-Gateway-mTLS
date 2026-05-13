@@ -1,0 +1,141 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: api-gateway
+  namespace: consul
+  labels:
+    app: api-gateway
+    component: consul-api-gateway
+  annotations:
+    # TLS configuration
+    consul.hashicorp.com/gateway-tls-min-version: "TLSv1.2"
+    consul.hashicorp.com/gateway-tls-max-version: "TLSv1.3"
+    consul.hashicorp.com/gateway-tls-cipher-suites: "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+spec:
+  gatewayClassName: consul
+  
+  listeners:
+    # HTTPS listener with mTLS client certificate validation
+    - name: https-mtls
+      protocol: HTTPS
+      port: 443
+      hostname: "*.example.com"
+      
+      tls:
+        # Terminate TLS at the gateway
+        mode: Terminate
+        
+        # Server certificate (Venafi-issued)
+        certificateRefs:
+          - name: api-gateway-tls
+            kind: Secret
+            group: ""
+        
+        # Client certificate validation options
+        options:
+          # Require client certificate from F5
+          gateway.networking.k8s.io/tls-client-validation: Required
+          
+          # Reference to CA bundle for validating F5 client certificates
+          gateway.networking.k8s.io/tls-client-ca-secret: venafi-f5-client-ca
+      
+      # Allow routes from all namespaces
+      allowedRoutes:
+        namespaces:
+          from: All
+        kinds:
+          - kind: HTTPRoute
+          - kind: TCPRoute
+    
+    # Optional: HTTP listener for redirect to HTTPS
+    - name: http-redirect
+      protocol: HTTP
+      port: 80
+      hostname: "*.example.com"
+      
+      allowedRoutes:
+        namespaces:
+          from: All
+        kinds:
+          - kind: HTTPRoute
+---
+# Secret containing API Gateway server certificate (Venafi-issued)
+# This should be created by the Venafi certificate request script
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-gateway-tls
+  namespace: consul
+  labels:
+    app: api-gateway
+    cert-type: server
+    issuer: venafi
+type: kubernetes.io/tls
+data:
+  # These will be populated by the Venafi script
+  # tls.crt: <base64-encoded-certificate>
+  # tls.key: <base64-encoded-private-key>
+---
+# ConfigMap containing Venafi CA bundle for validating F5 client certificates
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: venafi-f5-client-ca
+  namespace: consul
+  labels:
+    app: api-gateway
+    cert-type: ca-bundle
+    issuer: venafi
+data:
+  # This should contain the Venafi intermediate CA that issued F5 client certificates
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # Venafi Intermediate CA Certificate
+    # Replace with actual certificate from Venafi
+    -----END CERTIFICATE-----
+---
+# Service for API Gateway
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: consul
+  labels:
+    app: api-gateway
+    component: consul-api-gateway
+  annotations:
+    # Preserve client source IP
+    service.beta.kubernetes.io/external-traffic: Local
+spec:
+  type: LoadBalancer
+  # Or use NodePort if F5 connects directly to nodes
+  # type: NodePort
+  
+  selector:
+    app: api-gateway
+    component: consul-api-gateway
+  
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+      # nodePort: 30443  # Uncomment if using NodePort
+    
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+      # nodePort: 30080  # Uncomment if using NodePort
+  
+  # Restrict to F5 source IPs
+  loadBalancerSourceRanges:
+    - 10.0.1.0/24  # F5 primary subnet
+    - 10.0.2.0/24  # F5 backup subnet
+  
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+
+# Made with Bob

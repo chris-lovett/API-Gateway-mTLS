@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# F5 Client SSL Profile Configuration for External Client Connections
+#
+# This profile is used for inbound connections from external clients to F5
+# It terminates external TLS using public CA certificates
+#
+# Usage: 
+#   Source this file in tmsh or execute via bash
+#   tmsh -f client-ssl-profile.tmsh
+#
+
+# Create Client SSL Profile for External Clients → F5
+tmsh create ltm profile client-ssl external-client-ssl {
+    # Description
+    description "Client SSL profile for external client connections"
+    
+    # Base profile
+    defaults-from clientssl
+    
+    # Server Certificate (Public CA certificate)
+    # This is the certificate presented to external clients
+    cert public-domain.crt
+    key public-domain.key
+    chain public-ca-bundle.crt
+    
+    # Client Certificate Authentication (Optional)
+    # Set to 'require' if you need to validate client certificates
+    # Set to 'request' to request but not require client certificates
+    # Set to 'ignore' to not request client certificates
+    peer-cert-mode ignore
+    
+    # If requiring client certificates, specify the CA bundle
+    # ca-file external-client-ca-bundle.crt
+    
+    # TLS Version Configuration
+    # Enforce TLS 1.2 and above
+    tm-options { 
+        no-tlsv1 
+        no-tlsv1.1 
+    }
+    
+    # Cipher Suite Configuration
+    # Use strong ciphers compatible with modern browsers
+    ciphers "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256"
+    
+    # Cipher Group (alternative to cipher string)
+    # cipher-group none
+    
+    # SSL Options
+    options { 
+        dont-insert-empty-fragments 
+    }
+    
+    # Secure Renegotiation
+    secure-renegotiation require
+    
+    # Session Settings
+    cache-size 262144
+    cache-timeout 3600
+    
+    # Session Ticket
+    session-ticket enabled
+    
+    # OCSP Settings (optional)
+    # ocsp default-responder none
+    
+    # Alert Timeout
+    alert-timeout 10
+    
+    # Handshake Timeout
+    handshake-timeout 10
+    
+    # Unclean Shutdown
+    unclean-shutdown enabled
+    
+    # Strict Resume
+    strict-resume disabled
+    
+    # Generic Alert
+    generic-alert enabled
+    
+    # Renegotiation
+    renegotiate-period indefinite
+    renegotiate-size indefinite
+    
+    # Server Name (SNI)
+    server-name none
+    
+    # SSL Forward Proxy
+    ssl-forward-proxy-enabled disabled
+    
+    # Bypass on Handshake Alert
+    bypass-on-handshake-alert disabled
+    
+    # Bypass on Client Certificate Failure
+    bypass-on-client-cert-fail disabled
+}
+
+# Save configuration
+tmsh save sys config
+
+echo "✓ Client SSL profile 'external-client-ssl' created successfully"
+echo ""
+echo "Profile Details:"
+echo "  Name: external-client-ssl"
+echo "  Server Cert: public-domain.crt"
+echo "  Server Key: public-domain.key"
+echo "  TLS Version: 1.2+"
+echo "  Client Cert Mode: ignore (modify if client auth needed)"
+echo ""
+echo "Next steps:"
+echo "1. Verify the profile:"
+echo "   tmsh list ltm profile client-ssl external-client-ssl"
+echo ""
+echo "2. Apply to virtual server:"
+echo "   tmsh modify ltm virtual <vs-name> profiles add { external-client-ssl { context clientside } }"
+echo ""
+echo "3. If you need client certificate authentication:"
+echo "   tmsh modify ltm profile client-ssl external-client-ssl peer-cert-mode require ca-file external-client-ca-bundle.crt"
+
+# Made with Bob

@@ -1,0 +1,210 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-ingress-f5-only
+  namespace: consul
+  labels:
+    app: api-gateway
+    component: network-policy
+spec:
+  # Apply to API Gateway pods
+  podSelector:
+    matchLabels:
+      app: api-gateway
+      component: consul-api-gateway
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # Ingress rules
+  ingress:
+    # Allow from F5 Load Balancers only
+    - from:
+        - ipBlock:
+            cidr: 10.0.1.0/24  # F5 primary subnet
+        - ipBlock:
+            cidr: 10.0.2.0/24  # F5 backup subnet
+      ports:
+        - protocol: TCP
+          port: 8443  # HTTPS
+        - protocol: TCP
+          port: 8080  # HTTP (for redirect)
+    
+    # Allow from Prometheus for metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090  # Metrics
+    
+    # Allow from same namespace for health checks
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 8080
+  
+  # Egress rules
+  egress:
+    # Allow to backend services in default namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+    
+    # Allow to Consul servers
+    - to:
+        - podSelector:
+            matchLabels:
+              app: consul
+              component: server
+      ports:
+        - protocol: TCP
+          port: 8500  # HTTP API
+        - protocol: TCP
+          port: 8501  # HTTPS API
+        - protocol: TCP
+          port: 8502  # gRPC
+        - protocol: TCP
+          port: 8503  # gRPC TLS
+    
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow to Venafi for certificate operations (if needed)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0  # Adjust to Venafi server IP
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# Network Policy for backend services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-service-ingress
+  namespace: default
+  labels:
+    app: backend-service
+    component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-service
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow from API Gateway only
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: consul
+          podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    
+    # Allow from Prometheus for metrics
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+  
+  egress:
+    # Allow to database
+    - to:
+        - podSelector:
+            matchLabels:
+              app: database
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 3306  # MySQL
+    
+    # Allow to Consul for service mesh
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: consul
+          podSelector:
+            matchLabels:
+              app: consul
+      ports:
+        - protocol: TCP
+          port: 8500
+        - protocol: TCP
+          port: 8501
+        - protocol: TCP
+          port: 8502
+    
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Default deny all ingress policy for consul namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: consul
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Default deny all ingress policy for default namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+# Made with Bob

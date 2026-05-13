@@ -1,0 +1,58 @@
+# Certificates and Keys
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+*.csr
+venafi/scripts/certs/
+
+# Secrets
+*.secret
+*-secret.yaml
+secrets/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Environment files
+.env
+.env.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+
+# F5 specific
+*.ucs
+*.qkview
+
+# Venafi credentials
+venafi-token.txt
+venafi-credentials.yaml
+
+# Made with Bob

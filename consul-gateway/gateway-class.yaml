@@ -1,0 +1,178 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: GatewayClass
+metadata:
+  name: consul
+  labels:
+    app: consul-api-gateway
+spec:
+  controllerName: hashicorp.com/consul-api-gateway-controller
+  description: "Consul API Gateway with mTLS support"
+  
+  parametersRef:
+    group: api-gateway.consul.hashicorp.com
+    kind: GatewayClassConfig
+    name: consul-gateway-class-config
+---
+apiVersion: api-gateway.consul.hashicorp.com/v1alpha1
+kind: GatewayClassConfig
+metadata:
+  name: consul-gateway-class-config
+  namespace: consul
+  labels:
+    app: consul-api-gateway
+spec:
+  # Deployment configuration
+  deployment:
+    # Number of gateway replicas
+    replicas: 3
+    
+    # Resource requests and limits
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "500m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"
+    
+    # Pod anti-affinity for high availability
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: api-gateway
+                  component: consul-api-gateway
+              topologyKey: kubernetes.io/hostname
+    
+    # Node selector (optional)
+    # nodeSelector:
+    #   node-role.kubernetes.io/worker: "true"
+    
+    # Tolerations (optional)
+    # tolerations:
+    #   - key: "dedicated"
+    #     operator: "Equal"
+    #     value: "consul"
+    #     effect: "NoSchedule"
+  
+  # Service configuration
+  service:
+    type: LoadBalancer
+    # Or ClusterIP if using OpenShift Route
+    # type: ClusterIP
+    
+    annotations:
+      # OpenShift-specific annotations
+      service.beta.openshift.io/serving-cert-secret-name: api-gateway-tls
+      
+      # Preserve client IP
+      service.beta.kubernetes.io/external-traffic: Local
+    
+    # Service ports
+    ports:
+      - name: https
+        port: 443
+        targetPort: 8443
+        protocol: TCP
+      - name: http
+        port: 80
+        targetPort: 8080
+        protocol: TCP
+  
+  # Copy annotations from GatewayClass to Gateway
+  copyAnnotations:
+    service:
+      - "venafi.com/certificate-name"
+      - "venafi.com/certificate-policy"
+  
+  # Image configuration
+  image:
+    # Consul API Gateway image
+    consulAPIGateway: "hashicorp/consul-api-gateway:1.3.0"
+    # Envoy image
+    envoy: "envoyproxy/envoy:v1.27.0"
+  
+  # Consul configuration
+  consul:
+    # Consul server address
+    address: "consul-server.consul.svc.cluster.local:8501"
+    
+    # Use TLS for Consul communication
+    scheme: "https"
+    
+    # Consul authentication
+    authentication:
+      # Use Kubernetes auth method
+      method: "kubernetes"
+      
+      # Service account for authentication
+      account:
+        name: "consul-api-gateway"
+    
+    # Consul ports
+    ports:
+      # HTTPS port for Consul API
+      https: 8501
+      # gRPC port for xDS
+      grpc: 8502
+  
+  # Logging configuration
+  logLevel: "info"
+  
+  # Metrics configuration
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  
+  # TLS configuration for mTLS client certificate validation
+  tls:
+    # Enable client certificate validation
+    clientCertificateValidation:
+      enabled: true
+      
+      # Reference to CA secret for validating client certificates
+      caSecretRef:
+        name: venafi-f5-client-ca
+        namespace: consul
+      
+      # Optional: Enforce specific subject/SAN patterns
+      subjectAltNameMatchers:
+        - type: DNS
+          value: "f5-lb-*.example.com"
+        - type: DNS
+          value: "f5-load-balancer.example.com"
+        - type: IP
+          value: "10.0.1.0/24"
+      
+      # Optional: Verify client certificate subject
+      # subjectMatchers:
+      #   - type: CN
+      #     value: "f5-load-balancer.example.com"
+    
+    # Minimum TLS version
+    minVersion: "TLSv1.2"
+    
+    # Maximum TLS version
+    maxVersion: "TLSv1.3"
+    
+    # Cipher suites
+    cipherSuites:
+      - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+      - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_RSA_WITH_AES_256_SHA384"
+  
+  # OpenShift-specific configuration
+  openshift:
+    # Enable OpenShift-specific features
+    enabled: true
+    
+    # Security context constraints
+    securityContextConstraints:
+      # Use restricted SCC
+      name: "restricted"
+
+# Made with Bob

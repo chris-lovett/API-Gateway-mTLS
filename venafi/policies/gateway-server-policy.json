@@ -1,0 +1,66 @@
+{
+  "certificateAuthority": "Venafi-Ingress-CA",
+  "policy": {
+    "name": "consul-api-gateway-server",
+    "description": "Certificate policy for Consul API Gateway server certificates",
+    "subject": {
+      "organization": "YourOrganization",
+      "organizationalUnits": [
+        "Platform Engineering",
+        "Consul"
+      ],
+      "locality": "San Francisco",
+      "state": "California",
+      "country": "US"
+    },
+    "keyPair": {
+      "keyAlgorithm": "RSA",
+      "keySize": 2048,
+      "ellipticCurve": null
+    },
+    "subjectAltNames": {
+      "dnsNames": [
+        "api-gateway.consul.svc.cluster.local",
+        "api-gateway.example.com",
+        "*.api.example.com"
+      ],
+      "ipAddresses": [],
+      "emails": [],
+      "uris": []
+    },
+    "validity": {
+      "validityPeriod": "P90D",
+      "issueToDate": null
+    },
+    "keyUsage": {
+      "digitalSignature": true,
+      "keyEncipherment": true,
+      "keyAgreement": false,
+      "dataEncipherment": false,
+      "nonRepudiation": false,
+      "keyCertSign": false,
+      "crlSign": false,
+      "encipherOnly": false,
+      "decipherOnly": false
+    },
+    "extendedKeyUsage": {
+      "serverAuth": true,
+      "clientAuth": false,
+      "codeSigning": false,
+      "emailProtection": false,
+      "timeStamping": false,
+      "ocspSigning": false
+    },
+    "certificateTransparency": {
+      "enabled": false
+    },
+    "autoRenewal": {
+      "enabled": true,
+      "renewBeforeDays": 15
+    }
+  },
+  "approvalRequired": false,
+  "notificationRecipients": [
+    "platform-team@example.com"
+  ]
+}

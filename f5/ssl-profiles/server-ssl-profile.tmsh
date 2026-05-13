@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# F5 Server SSL Profile Configuration for mTLS to Consul API Gateway
+#
+# This profile is used for outbound connections from F5 to API Gateway
+# It presents the F5 client certificate and validates the Gateway server certificate
+#
+# Usage: 
+#   Source this file in tmsh or execute via bash
+#   tmsh -f server-ssl-profile.tmsh
+#
+
+# Create Server SSL Profile for F5 → API Gateway mTLS
+tmsh create ltm profile server-ssl f5-to-consul-gateway {
+    # Description
+    description "mTLS profile for F5 to Consul API Gateway connections"
+    
+    # Base profile
+    defaults-from serverssl
+    
+    # Client Certificate (F5 identity - Venafi issued)
+    # F5 presents this certificate to authenticate to API Gateway
+    cert f5-client-cert
+    key f5-client-key
+    chain venafi-ca-bundle
+    
+    # Server Certificate Validation (API Gateway certificate)
+    # F5 validates the API Gateway's server certificate
+    ca-file api-gateway-server-ca
+    peer-cert-mode require
+    
+    # SNI Configuration
+    # Must match the CN/SAN in API Gateway certificate
+    server-name api-gateway.consul.svc.cluster.local
+    sni-default true
+    sni-require true
+    
+    # TLS Version Configuration
+    # Enforce TLS 1.2 and above
+    tm-options { 
+        no-tlsv1 
+        no-tlsv1.1 
+    }
+    
+    # Cipher Suite Configuration
+    # Use only strong ciphers
+    ciphers "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-SHA384"
+    
+    # Certificate Validation Options
+    ssl-forward-proxy-enabled disabled
+    ssl-forward-proxy-bypass disabled
+    
+    # Secure Renegotiation
+    secure-renegotiation require
+    
+    # Session Settings
+    cache-size 20480
+    cache-timeout 3600
+    
+    # OCSP Settings (optional - enable if using OCSP)
+    # ocsp default-responder none
+    
+    # Alert Timeout
+    alert-timeout 10
+    
+    # Handshake Timeout
+    handshake-timeout 10
+    
+    # Unclean Shutdown
+    unclean-shutdown enabled
+    
+    # Strict Resume
+    strict-resume disabled
+    
+    # Generic Alert
+    generic-alert enabled
+    
+    # Renegotiation
+    renegotiate-period indefinite
+    renegotiate-size indefinite
+    
+    # Session Ticket
+    session-ticket disabled
+}
+
+# Save configuration
+tmsh save sys config
+
+echo "✓ Server SSL profile 'f5-to-consul-gateway' created successfully"
+echo ""
+echo "Profile Details:"
+echo "  Name: f5-to-consul-gateway"
+echo "  Client Cert: f5-client-cert"
+echo "  Client Key: f5-client-key"
+echo "  Server CA: api-gateway-server-ca"
+echo "  SNI: api-gateway.consul.svc.cluster.local"
+echo "  TLS Version: 1.2+"
+echo "  Peer Cert Mode: require"
+echo ""
+echo "Next steps:"
+echo "1. Verify the profile:"
+echo "   tmsh list ltm profile server-ssl f5-to-consul-gateway"
+echo ""
+echo "2. Apply to virtual server:"
+echo "   tmsh modify ltm virtual <vs-name> profiles add { f5-to-consul-gateway { context serverside } }"
+
+# Made with Bob

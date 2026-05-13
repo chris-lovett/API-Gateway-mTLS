@@ -1,0 +1,203 @@
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-gateway-to-backend
+  namespace: default
+  labels:
+    app: backend-service
+spec:
+  # Destination service (backend)
+  destination:
+    name: backend-service
+  
+  # Sources that can access the destination
+  sources:
+    # Allow API Gateway to access backend
+    - name: api-gateway
+      namespace: consul
+      action: allow
+      
+      # L7 permissions for fine-grained control
+      permissions:
+        # Allow GET requests to /api/v1/*
+        - action: allow
+          http:
+            pathPrefix: /api/v1
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+        
+        # Allow health checks
+        - action: allow
+          http:
+            pathExact: /health
+            methods:
+              - GET
+        
+        # Allow metrics endpoint (optional)
+        - action: allow
+          http:
+            pathExact: /metrics
+            methods:
+              - GET
+    
+    # Deny all other sources by default
+    - name: "*"
+      action: deny
+---
+# Service Intentions for user service
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-gateway-to-user-service
+  namespace: default
+  labels:
+    app: user-service
+spec:
+  destination:
+    name: user-service
+  
+  sources:
+    - name: api-gateway
+      namespace: consul
+      action: allow
+      permissions:
+        - action: allow
+          http:
+            pathPrefix: /api/users
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+---
+# Service Intentions for order service
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-gateway-to-order-service
+  namespace: default
+  labels:
+    app: order-service
+spec:
+  destination:
+    name: order-service
+  
+  sources:
+    - name: api-gateway
+      namespace: consul
+      action: allow
+      permissions:
+        - action: allow
+          http:
+            pathPrefix: /api/orders
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+---
+# Service Intentions for product service
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-gateway-to-product-service
+  namespace: default
+  labels:
+    app: product-service
+spec:
+  destination:
+    name: product-service
+  
+  sources:
+    - name: api-gateway
+      namespace: consul
+      action: allow
+      permissions:
+        - action: allow
+          http:
+            pathPrefix: /api/products
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+---
+# Example: Service-to-service intentions (backend to database)
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: backend-to-database
+  namespace: default
+  labels:
+    app: database
+spec:
+  destination:
+    name: database-service
+  
+  sources:
+    # Allow backend service to access database
+    - name: backend-service
+      namespace: default
+      action: allow
+    
+    # Allow user service to access database
+    - name: user-service
+      namespace: default
+      action: allow
+    
+    # Deny all others
+    - name: "*"
+      action: deny
+---
+# Example: Deny intentions for sensitive services
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: admin-service-deny-all
+  namespace: default
+  labels:
+    app: admin-service
+spec:
+  destination:
+    name: admin-service
+  
+  sources:
+    # Only allow specific admin gateway
+    - name: admin-gateway
+      namespace: consul
+      action: allow
+      permissions:
+        - action: allow
+          http:
+            pathPrefix: /admin
+            methods:
+              - GET
+              - POST
+            headers:
+              - name: X-Admin-Token
+                present: true
+    
+    # Deny everything else
+    - name: "*"
+      action: deny
+---
+# Example: Time-based access control (requires Consul Enterprise)
+# apiVersion: consul.hashicorp.com/v1alpha1
+# kind: ServiceIntentions
+# metadata:
+#   name: maintenance-window
+#   namespace: default
+# spec:
+#   destination:
+#     name: backend-service
+#   
+#   sources:
+#     - name: maintenance-service
+#       action: allow
+#       # Only allow during maintenance window
+#       # This would require additional Consul Enterprise features
+
+# Made with Bob

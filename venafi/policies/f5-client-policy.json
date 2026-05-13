@@ -1,0 +1,70 @@
+{
+  "certificateAuthority": "Venafi-Ingress-CA",
+  "policy": {
+    "name": "f5-client-certificate",
+    "description": "Certificate policy for F5 Load Balancer client certificates",
+    "subject": {
+      "commonName": "f5-load-balancer.example.com",
+      "organization": "YourOrganization",
+      "organizationalUnits": [
+        "Infrastructure",
+        "Load Balancers"
+      ],
+      "locality": "San Francisco",
+      "state": "California",
+      "country": "US"
+    },
+    "keyPair": {
+      "keyAlgorithm": "RSA",
+      "keySize": 2048,
+      "ellipticCurve": null
+    },
+    "subjectAltNames": {
+      "dnsNames": [
+        "f5-lb-01.example.com",
+        "f5-lb-02.example.com",
+        "f5-load-balancer.example.com"
+      ],
+      "ipAddresses": [
+        "10.0.1.10",
+        "10.0.1.11"
+      ],
+      "emails": [],
+      "uris": []
+    },
+    "validity": {
+      "validityPeriod": "P90D",
+      "issueToDate": null
+    },
+    "keyUsage": {
+      "digitalSignature": true,
+      "keyEncipherment": true,
+      "keyAgreement": false,
+      "dataEncipherment": false,
+      "nonRepudiation": false,
+      "keyCertSign": false,
+      "crlSign": false,
+      "encipherOnly": false,
+      "decipherOnly": false
+    },
+    "extendedKeyUsage": {
+      "serverAuth": false,
+      "clientAuth": true,
+      "codeSigning": false,
+      "emailProtection": false,
+      "timeStamping": false,
+      "ocspSigning": false
+    },
+    "certificateTransparency": {
+      "enabled": false
+    },
+    "autoRenewal": {
+      "enabled": true,
+      "renewBeforeDays": 15
+    }
+  },
+  "approvalRequired": false,
+  "notificationRecipients": [
+    "infrastructure-team@example.com"
+  ]
+}
