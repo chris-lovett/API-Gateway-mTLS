@@ -4,14 +4,6 @@
 
 This document is the operator-focused deep dive for the API Gateway mTLS deployment in this repository.
 
-Use this document if you are:
-
-- a platform operator
-- responsible for F5, Kubernetes ingress, or service mesh behavior
-- troubleshooting connectivity or certificate problems
-- trying to understand which Kubernetes and Consul resources implement the end-to-end flow
-- reviewing how trust is established across the full request path
-
 If you want a shorter conceptual introduction, see [architecture.md](./architecture.md).
 
 ## Scope
