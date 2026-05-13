@@ -126,11 +126,11 @@ flowchart LR
     pod --> health
 
     %% Response flow hints
-    pod -. 8. Response .-> beSidecar
-    beSidecar -. 9. Mesh return path .-> gwsidecar
-    gwsidecar -. 10. Gateway response .-> gateway
-    gateway -. 11. F5 return path .-> f5out
-    f5out -. 12. HTTPS response .-> client
+    pod -.->|8. Response| beSidecar
+    beSidecar -.->|9. Mesh return path| gwsidecar
+    gwsidecar -.->|10. Gateway response| gateway
+    gateway -.->|11. F5 return path| f5out
+    f5out -.->|12. HTTPS response| client
 
     %% Styles
     classDef external fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;
@@ -418,7 +418,7 @@ flowchart TD
 ## Operational Notes
 
 > [!NOTE]
-> The backend application does **not** terminate TLS directly. TLS is terminated or enforced by infrastructure layers: F5 at the edge, API Gateway for ingress mTLS, and Consul sidecars for service mesh mTLS.
+> The backend application does **not** terminate TLS directly. TLS is terminated or enforced by infrastructure layers: F5 at the edge, API Gateway for ingress mTLS, and Consul sidecars for service mesh.
 
 > [!TIP]
 > When debugging connectivity, check the failing boundary first:
