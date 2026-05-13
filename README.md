@@ -101,7 +101,7 @@ The repository is organized around the operator workflow of issuing certificates
 
 ## Quick Start
 
-This quickstart walks through how to stand up a secure ingress path from F5 LTM to Consul API Gateway using mutual TLS. It is written for platform operators who want to understand both **what they are doing** and **which commands to run**.
+This quickstart walks through how to stand up a secure ingress path from F5 LTM to Consul API Gateway using mutual TLS. 
 
 By the end of this process, you will have:
 
