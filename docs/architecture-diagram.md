@@ -1,67 +1,58 @@
-# API Gateway mTLS Architecture
+# Architecture Deep Dive: Deployment, Flow, and Trust Boundaries
 
-## Executive Overview
+## Purpose
+
+This document is the operator-focused deep dive for the API Gateway mTLS deployment in this repository.
+
+Use this document if you are:
+
+- a platform operator
+- responsible for F5, Kubernetes ingress, or service mesh behavior
+- troubleshooting connectivity or certificate problems
+- trying to understand which Kubernetes and Consul resources implement the end-to-end flow
+- reviewing how trust is established across the full request path
+
+If you want a shorter conceptual introduction, see [architecture.md](./architecture.md).
+
+## Scope
+
+This document focuses on:
+
+- the deployed Kubernetes and Consul resources represented in this repository
+- how traffic flows from F5 into the cluster
+- where TLS is terminated or enforced
+- how routing and authorization are applied
+- where operators should look when failures occur
+
+## End-to-End Conceptual Flow
 
 ```mermaid
 flowchart LR
-    client[External Clients]
-    f5[F5 Edge]
-    gateway[API Gateway]
-    backend[Backend Services]
+    client([🌐 External Client])
+    f5([🛡️ F5 Edge])
+    gateway([🚪 Consul API Gateway])
+    mesh([🔐 Consul Connect Mesh])
+    backend([📦 Backend Service])
 
     client -->|HTTPS| f5
-    f5 -->|mTLS| gateway
-    gateway -->|Service Mesh mTLS| backend
-```
-
-### Executive Summary
-
-- **Clients connect securely** over standard HTTPS.
-- **F5 authenticates to the API Gateway** using **mutual TLS (mTLS)**.
-- **Internal service-to-service traffic** is protected separately by the **Consul service mesh**.
-- **Application teams do not manage edge TLS directly**.
-
-## At a Glance
-
-```mermaid
-flowchart LR
-    client([🌐 External Client<br/>Browser / Mobile / API Client])
-    f5([🛡️ F5 Load Balancer<br/>Public TLS termination<br/>WAF / inspection])
-
-    subgraph cluster[☸️ OpenShift / Kubernetes Cluster]
-        direction LR
-        gateway([🚪 Consul API Gateway<br/>Venafi server cert<br/>Validates F5 client cert])
-        mesh([🔐 Consul Connect Service Mesh<br/>Automatic workload mTLS])
-        backend([📦 Backend Service<br/>Plain HTTP only inside pod])
-    end
-
-    client -->|HTTPS<br/>Public CA| f5
-    f5 -->|mTLS<br/>Venafi PKI<br/>Primary security boundary| gateway
-    gateway -->|mTLS<br/>Consul CA| mesh
+    f5 -->|Venafi mTLS| gateway
+    gateway -->|Consul mTLS| mesh
     mesh -->|localhost HTTP| backend
 
-    classDef edge fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px,color:#111827;
-    classDef ingress fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
-    classDef meshClass fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#111827;
-    classDef app fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#111827;
+    classDef blue fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#111827;
+    classDef orange fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef green fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+    classDef purple fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
 
-    class client edge;
-    class f5 ingress;
-    class gateway ingress;
-    class mesh meshClass;
-    class backend app;
+    class client blue;
+    class f5,gateway orange;
+    class mesh green;
+    class backend purple;
 ```
-
-### Diagram Legend
-
-- **Blue**: external client entry point
-- **Orange**: edge ingress and primary mTLS trust boundary
-- **Green**: internal service mesh trust domain
-- **Purple**: application workload
 
 ## Kubernetes Deployment View
 
-This one-page view focuses on the **Kubernetes resources deployed in this repository** and how they relate to each other, while still showing the **F5 LTM** and **backend service** in the end-to-end path.
+This view shows the major Kubernetes and Consul resources represented in the repository and how they relate to the external F5 and the backend service.
 
 ```mermaid
 flowchart LR
@@ -74,7 +65,7 @@ flowchart LR
         subgraph consulns[📦 Namespace: consul]
             direction TB
             gc([GatewayClass<br/>consul])
-            gcc([GatewayClassConfig<br/>3 replicas / LB service<br/>mTLS client validation])
+            gcc([GatewayClassConfig<br/>replicas / service / TLS behavior])
             gwsvc([Service<br/>api-gateway<br/>LoadBalancer 80 / 443])
             gateway([Gateway<br/>api-gateway<br/>HTTPS + HTTP listeners])
             gwcert([Secret / CA config<br/>api-gateway-tls<br/>venafi-f5-client-ca])
@@ -86,7 +77,7 @@ flowchart LR
             route([HTTPRoute<br/>backend-api-route])
             intent([ServiceIntentions<br/>api-gateway-to-backend])
             besvc([Service<br/>backend-service<br/>ClusterIP 8080])
-            bedeploy([Deployment<br/>backend<br/>3 replicas])
+            bedeploy([Deployment<br/>backend<br/>replicas])
             pods([Backend Pods<br/>App container + Consul sidecar])
             sa([ServiceAccount<br/>backend-service])
             hpa([HPA<br/>backend-hpa])
@@ -136,133 +127,106 @@ flowchart LR
     class gwcert aux;
 ```
 
-### How to Read This Diagram
+## How to Read the Deployment View
 
-- **F5 LTM** is external to the cluster and connects to the Kubernetes-hosted API Gateway over **mTLS**.
-- In the **`consul` namespace**, the repo defines the **Gateway API control and ingress resources**:
-  - `GatewayClass`
-  - `GatewayClassConfig`
-  - `Gateway`
-  - `Service` for the gateway
-  - TLS materials for server certificate and client CA validation
-  - Gateway-specific `NetworkPolicy`
-- In the **`default` namespace**, the repo defines the **application-facing resources**:
-  - `HTTPRoute`
-  - `ServiceIntentions`
-  - `backend-service` `Service`
-  - `backend` `Deployment`
-  - `ServiceAccount`
-  - `HorizontalPodAutoscaler`
-  - `PodDisruptionBudget`
-  - backend `NetworkPolicy`
-- **Consul Connect mTLS** protects gateway-to-backend communication inside the cluster.
+- **F5** is outside the cluster and connects to the gateway service using **mTLS**.
+- The **`consul` namespace** contains the gateway control and ingress resources.
+- The **`default` namespace** contains the route, authorization, and application resources.
+- **Consul Connect** secures the gateway-to-backend path inside the cluster.
+- **NetworkPolicy** and **ServiceIntentions** are separate controls:
+  - `NetworkPolicy` constrains network reachability
+  - `ServiceIntentions` constrains service-to-service authorization in the mesh
 
-### Resource Relationship Summary
+## Resource Relationship Summary
 
 | Resource | Role | Relationship |
 |---|---|---|
 | `GatewayClass` | Declares Consul as the Gateway API controller | Referenced by `Gateway` |
-| `GatewayClassConfig` | Configures gateway deployment/service/TLS behavior | Attached to `GatewayClass` |
-| `Gateway` | Defines listeners and ingress TLS/mTLS settings | Front door inside Kubernetes |
-| `api-gateway` Service | Exposes gateway listeners on ports 80/443 | Target for F5 connection |
-| `api-gateway-tls` / `venafi-f5-client-ca` | Server cert and trusted client CA material | Used by gateway TLS validation |
-| `HTTPRoute` | Maps incoming paths/hosts to backend service | Attached to `Gateway` |
-| `ServiceIntentions` | Authorizes gateway to call backend over mesh | Applies between gateway and backend |
-| `backend-service` Service | Stable in-cluster endpoint for backend pods | Referenced by route |
-| `backend` Deployment | Runs application replicas | Backed by Consul sidecar injection |
-| `ServiceAccount` | Workload identity for backend pods | Used by deployment |
-| `HPA` | Scales backend deployment | Targets `backend` |
-| `PDB` | Protects backend availability during disruption | Targets backend pods |
-| `NetworkPolicy` | Restricts ingress/egress paths | Protects gateway and backend workloads |
+| `GatewayClassConfig` | Configures gateway deployment and service behavior | Attached to `GatewayClass` |
+| `Gateway` | Defines listeners and ingress TLS behavior | Front door inside Kubernetes |
+| `api-gateway` `Service` | Exposes gateway listeners on 80/443 | Target for F5 traffic |
+| `api-gateway-tls` / `venafi-f5-client-ca` | Server certificate and trusted client CA material | Used by gateway TLS validation |
+| `HTTPRoute` | Maps host/path traffic to backend services | Attached to `Gateway` |
+| `ServiceIntentions` | Authorizes gateway-to-backend communication | Applied in the mesh |
+| `backend-service` `Service` | Stable endpoint for backend pods | Target selected by route |
+| `backend` `Deployment` | Runs the application workload | Backed by sidecar-enabled pods |
+| `ServiceAccount` | Workload identity context | Used by deployment |
+| `HPA` | Scales the deployment | Targets backend workload |
+| `PDB` | Protects service availability during disruption | Applies to backend pods |
+| `NetworkPolicy` | Restricts allowed traffic paths | Protects gateway and backend workloads |
 
-## Why This Architecture Exists
+## Full Request Flow
 
-This architecture separates external ingress security from internal service-to-service security:
+### Step 1: External client reaches F5
 
-- **External Client → F5** uses standard HTTPS with a public CA certificate.
-- **F5 → API Gateway** uses **mutual TLS (mTLS)** with **Venafi-issued certificates**.
-- **API Gateway → Backend Service** uses **Consul Connect mTLS** with **Consul-issued identities**.
-- **Backend applications** stay simple by receiving plain HTTP only from their local sidecar.
+A client connects to the public API endpoint over HTTPS.
 
-## End-to-End Reference Architecture
+At this boundary:
 
-```mermaid
-flowchart LR
-    %% Entry
-    client([🌐 External Client<br/>Browser / Mobile / API Consumer])
-    dns([🧭 DNS<br/>api.example.com])
+- F5 presents the public-facing certificate
+- public TLS is terminated
+- edge controls such as inspection, WAF, or rate limiting may be applied
 
-    %% Edge
-    subgraph edge[🛡️ Edge / DMZ]
-        direction TB
-        f5in([F5 Virtual Server<br/>Inbound TLS / Public CA])
-        waf([WAF / Inspection / Policy])
-        f5out([F5 Server SSL Profile<br/>mTLS client to Gateway<br/>Venafi client cert])
-    end
+### Step 2: F5 establishes mTLS to the API Gateway
 
-    %% Cluster
-    subgraph cluster[☸️ OpenShift / Kubernetes Cluster]
-        direction LR
+F5 becomes the TLS client for the next hop and opens a new connection to the gateway service.
 
-        subgraph ingress[🚪 Ingress Layer]
-            direction TB
-            gwsvc([Gateway Service<br/>LoadBalancer / NodePort])
-            gateway([Consul API Gateway<br/>HTTPS Listener<br/>Venafi server cert])
-            routes([HTTPRoute Rules<br/>Path / Header / Split])
-        end
+At this boundary:
 
-        subgraph mesh[🔐 Consul Connect Mesh]
-            direction TB
-            gwsidecar([Gateway Envoy Sidecar<br/>Consul identity])
-            meshmtls([Service Mesh mTLS<br/>Consul CA])
-            beSidecar([Backend Envoy Sidecar<br/>Consul identity])
-        end
+- F5 presents a **Venafi-issued client certificate**
+- the API Gateway presents a **Venafi-issued server certificate**
+- each side validates the other against trusted CA material
+- this is the primary authenticated ingress boundary into the cluster-hosted gateway layer
 
-        subgraph app[📦 Application Layer]
-            direction TB
-            backend([Backend Service<br/>ClusterIP])
-            pod([App Container<br/>localhost HTTP only])
-            health([Health / Ready Endpoints])
-        end
-    end
+### Step 3: API Gateway evaluates listener and route rules
 
-    %% Flow
-    client -->|1. HTTPS| dns
-    dns -->|2. Resolve / Route| f5in
-    f5in --> waf
-    waf -->|3. Inspect / enforce| f5out
-    f5out -->|4. mTLS via Venafi PKI| gwsvc
-    gwsvc --> gateway
-    gateway --> routes
-    routes -->|5. Route selected request| gwsidecar
-    gwsidecar -->|6. Consul Connect mTLS| meshmtls
-    meshmtls --> beSidecar
-    beSidecar -->|7. localhost HTTP| backend
-    backend --> pod
-    pod --> health
+Once the request is accepted:
 
-    %% Response flow hints
-    pod -.->|8. Response| beSidecar
-    beSidecar -.->|9. Mesh return path| gwsidecar
-    gwsidecar -.->|10. Gateway response| gateway
-    gateway -.->|11. F5 return path| f5out
-    f5out -.->|12. HTTPS response| client
+- the gateway listener accepts the connection
+- client certificate validation has already succeeded
+- routing rules determine which backend service should receive the request
+- host, path, header, and other route logic may apply
 
-    %% Styles
-    classDef external fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;
-    classDef edgeClass fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
-    classDef ingressClass fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#111827;
-    classDef meshClass fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
-    classDef appClass fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
-    classDef aux fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827;
+### Step 4: Gateway forwards into the mesh
 
-    class client,dns external;
-    class f5in,waf,f5out edgeClass;
-    class gwsvc,gateway,routes ingressClass;
-    class gwsidecar,meshmtls,beSidecar meshClass;
-    class backend,pod appClass;
-    class health aux;
-```
+The gateway uses the service mesh path to reach the backend.
+
+At this boundary:
+
+- gateway-side and backend-side proxies establish **Consul Connect mTLS**
+- service identity and authorization apply
+- `ServiceIntentions` determine whether the communication is allowed
+
+### Step 5: Backend sidecar forwards to the app
+
+The backend sidecar forwards traffic to the local application container.
+
+At this point:
+
+- the application typically receives **plain HTTP**
+- the application does not directly manage public ingress certificates
+- the application remains decoupled from external trust establishment details
+
+### Step 6: Response returns through the same layers
+
+The response returns in reverse:
+
+- app → backend sidecar
+- backend sidecar → gateway sidecar over mesh mTLS
+- gateway → F5
+- F5 → external client
+
+## Step-by-Step Reference Table
+
+| Step | From | To | Protocol | Identity / Certificate | What Happens |
+|---|---|---|---|---|---|
+| 1 | Client | F5 | HTTPS | Public CA | Client initiates secure connection |
+| 2 | F5 inbound | F5 processing | TLS terminated | Public server certificate on F5 | Edge inspection and policy enforcement |
+| 3 | F5 outbound | API Gateway service | mTLS | F5 client cert + Gateway server cert | Mutual authentication is enforced |
+| 4 | API Gateway | Route engine | HTTPS request context | Gateway listener and route policy | Request is matched to backend destination |
+| 5 | Gateway sidecar | Backend sidecar | mTLS | Consul workload identities | Internal service-to-service security |
+| 6 | Backend sidecar | App container | HTTP | localhost only | Application receives request |
+| 7 | App | Return path | Reverse of above | Same layered trust boundaries | Response flows back to caller |
 
 ## Trust Boundaries
 
@@ -273,11 +237,11 @@ flowchart LR
 | 3 | API Gateway → Backend | mTLS | Consul CA | Service-to-service encryption |
 
 > [!IMPORTANT]
-> The primary security boundary is **F5 → API Gateway**. This is where mutual authentication is enforced using Venafi-issued certificates.
+> The primary security boundary is **F5 → API Gateway**. That is where mutual authentication is enforced for ingress into the platform.
 
-## Zoom-In by Layer
+## Layer-by-Layer Deep Dive
 
-### 1. Edge Ingress and Public TLS
+### 1. Edge Ingress Layer
 
 ```mermaid
 flowchart LR
@@ -292,11 +256,13 @@ flowchart LR
 ```
 
 Key points:
-- Public clients connect to `api.example.com` over HTTPS.
-- F5 terminates public TLS and can apply WAF, inspection, or rate limiting.
-- This layer protects the public edge but is **not** the primary mutual-authentication boundary.
 
-### 2. Primary Security Boundary: F5 → API Gateway mTLS
+- External clients connect over standard HTTPS.
+- F5 terminates public TLS.
+- F5 can enforce edge policy before traffic enters the platform.
+- This layer is the public entry point, but not the primary mutual-authentication boundary.
+
+### 2. Ingress mTLS Boundary
 
 ```mermaid
 flowchart LR
@@ -311,12 +277,14 @@ flowchart LR
 ```
 
 Key points:
-- F5 acts as the **TLS client** when connecting to the API Gateway.
-- The API Gateway presents a **Venafi-issued server certificate**.
-- F5 presents a **Venafi-issued client certificate**.
-- Both sides validate identity before traffic is allowed.
 
-### 3. Internal East-West Service Mesh
+- F5 acts as the TLS client.
+- The API Gateway acts as the TLS server on this boundary.
+- The gateway validates the F5 client certificate.
+- F5 validates the gateway server certificate.
+- Hostname verification and SNI should remain enabled where supported.
+
+### 3. Internal Mesh Layer
 
 ```mermaid
 flowchart LR
@@ -333,90 +301,22 @@ flowchart LR
 ```
 
 Key points:
-- Internal traffic uses **Consul Connect mTLS**, not Venafi ingress certificates.
-- Sidecars handle encryption and identity automatically.
-- The application container can remain plain HTTP internally.
 
-## Request Flow
-
-1. **Client request**  
-   A client sends `HTTPS` traffic to `api.example.com` using a certificate trusted by a public CA.
-
-2. **F5 processing**  
-   F5 terminates external TLS, performs inspection or policy enforcement, and opens a new **mTLS** connection to the API Gateway.
-
-3. **Gateway authentication and routing**  
-   The API Gateway validates the F5 client certificate, applies `HTTPRoute` rules, and forwards traffic toward the backend service.
-
-4. **Service mesh transport**  
-   Consul Connect sidecars establish **mTLS** between the gateway and backend service.
-
-5. **Backend handling**  
-   The backend sidecar forwards plain HTTP to the local application container.
-
-6. **Response path**  
-   The response returns over the same layers in reverse: backend mesh → gateway → F5 → external client.
-
-## Step-by-Step Reference Table
-
-| Step | From | To | Protocol | Identity / Certificate | What Happens |
-|---|---|---|---|---|---|
-| 1 | Client | DNS / F5 | HTTPS | Public CA | Client resolves and initiates secure connection |
-| 2 | F5 inbound | F5 processing | TLS terminated | Public server cert on F5 | Edge TLS is terminated and inspected |
-| 3 | F5 outbound | API Gateway service | mTLS | F5 client cert + Gateway server cert | Mutual authentication enforced |
-| 4 | API Gateway | Route engine | HTTPS request context | Gateway listener policy | Path/header routing decision made |
-| 5 | Gateway sidecar | Backend sidecar | mTLS | Consul identities | Mesh encryption and authorization |
-| 6 | Backend sidecar | App container | HTTP | localhost only | Plain HTTP delivered internally |
-| 7 | App | Return path | Reverse of above | Same trust layers | Response returns to caller |
-
-## Core Components
-
-### External Client
-- Web browser, mobile app, or API client
-- Connects to `api.example.com`
-- Uses standard HTTPS
-- May optionally present a client certificate if required by edge policy
-
-### F5 Load Balancer
-- Terminates public TLS
-- Presents the public-facing server certificate
-- Applies inspection, WAF, rate limiting, or other edge controls
-- Presents an **F5 client certificate** to the API Gateway
-- Validates the API Gateway server certificate
-- Forwards traffic only to healthy API Gateway pool members
-
-### Consul API Gateway
-- Exposes HTTPS listener for inbound traffic from F5
-- Presents a **Venafi-issued server certificate**
-- Requires and validates the F5 client certificate
-- Applies `HTTPRoute` path and header rules
-- Uses Consul Connect sidecar for service mesh communication
-
-### Consul Service Mesh
-- Establishes automatic mTLS between workloads
-- Issues short-lived workload identities
-- Enforces service intentions and authorization rules
-- Keeps service-to-service encryption separate from ingress PKI
-
-### Backend Service
-- Receives traffic through a Consul sidecar
-- Benefits from mesh identity and authorization controls
-- Receives plain HTTP from `localhost` sidecar traffic only
-- Does not need to manage external TLS directly
+- Internal service-to-service traffic uses **Consul Connect mTLS**.
+- Sidecars carry workload identity and encryption responsibilities.
+- The application can remain plain HTTP internally.
+- Internal mesh PKI is intentionally separate from ingress PKI.
 
 ## Certificate Model
 
-The environment uses **two separate PKI domains**:
-
-1. **Venafi PKI** for ingress trust between F5 and API Gateway
-2. **Consul PKI** for east-west service mesh trust
+This deployment uses **two separate PKI domains**.
 
 ### PKI Relationship Map
 
 ```mermaid
 flowchart TB
-    venafi([🏛️ Venafi PKI<br/>Ingress trust domain])
     publicca([🌍 Public CA<br/>Internet-facing trust])
+    venafi([🏛️ Venafi PKI<br/>Ingress trust domain])
     consulca([🔐 Consul CA<br/>Mesh trust domain])
 
     publicca --> f5pub([F5 public server cert])
@@ -434,71 +334,95 @@ flowchart TB
     class consulca,gwleaf,beleaf mesh;
 ```
 
-### Venafi PKI: Edge Ingress Trust
+### Venafi PKI: Ingress Trust
 
-| Certificate | Used By | Purpose | Rotation / Lifetime | Storage |
-|---|---|---|---|---|
-| Public server certificate | F5 | External HTTPS for `api.example.com` | Per public CA policy | F5 certificate store |
-| F5 client certificate | F5 | Authenticate F5 to API Gateway | Rotated before expiry | F5 certificate store |
-| API Gateway server certificate | API Gateway | Authenticate API Gateway to F5 | Rotated before expiry | Kubernetes Secret |
+| Certificate | Used By | Purpose | Typical Storage |
+|---|---|---|---|
+| Public server certificate | F5 | Public HTTPS for clients | F5 certificate store |
+| F5 client certificate | F5 | Authenticate F5 to API Gateway | F5 certificate store |
+| API Gateway server certificate | API Gateway | Authenticate gateway to F5 | Kubernetes Secret |
 
-Typical validation on this boundary includes:
+Typical controls on this boundary include:
 
-- Client certificate required
-- Hostname verification enabled
+- client certificate required
+- hostname verification enabled
 - SAN / identity matching enforced
 - TLS 1.2+ only
-- Strong cipher suites only
+- strong cipher suites only
 
-### Consul PKI: Service Mesh Trust
+### Consul PKI: Mesh Trust
 
-| Certificate | Used By | Purpose | Rotation / Lifetime | Storage |
-|---|---|---|---|---|
-| Gateway sidecar certificate | API Gateway sidecar | Mesh identity | Short-lived / automatic | Envoy memory |
-| Backend sidecar certificate | Backend sidecar | Mesh identity | Short-lived / automatic | Envoy memory |
+| Certificate | Used By | Purpose | Typical Storage |
+|---|---|---|---|
+| Gateway sidecar certificate | Gateway sidecar | Mesh identity | Sidecar runtime / memory |
+| Backend sidecar certificate | Backend sidecar | Mesh identity | Sidecar runtime / memory |
 
-This PKI domain is intentionally separate from the Venafi ingress PKI.
+This trust domain is separate because it serves a different purpose: internal workload identity rather than ingress authentication.
 
-## Policy and Routing Summary
-
-### Network policy
-- Restrict ingress to trusted F5 source IP ranges only
-- Allow egress only to required backend services and Consul components
-- Deny other traffic by default
+## Policy and Routing Model
 
 ### Gateway routing
-- Path-based routing such as `/api/v1/* → backend-service`
-- Header mutation such as `X-Forwarded-Proto` or `X-Gateway`
-- Optional traffic splitting for canary releases
-- Optional rate limiting and edge policy enforcement
 
-### Service intentions
-- Explicitly allow `api-gateway → backend-service`
-- Restrict paths and methods where needed
-- Deny all unspecified sources by default
+The gateway layer is responsible for traffic steering such as:
 
-## Operational Views
+- host-based routing
+- path-based routing
+- header-based routing
+- optional traffic splitting
 
-### Failure domain map
+In this repository, `HTTPRoute` resources represent the application-facing routing intent.
+
+### Service authorization
+
+`ServiceIntentions` authorize which services may communicate across the mesh.
+
+Typical expectation:
+
+- explicitly allow `api-gateway → backend-service`
+- deny unspecified communication by default
+
+### Network reachability
+
+`NetworkPolicy` restricts traffic at the network layer.
+
+Typical expectation:
+
+- only trusted F5 sources may reach the gateway entry points
+- backend ingress is limited to intended paths
+- default-deny behavior is preferred where practical
+
+## Operational View
+
+### What operators usually care about
+
+When traffic fails, operators generally need to answer one of these questions:
+
+1. Did the client reach F5?
+2. Did F5 successfully establish mTLS to the gateway?
+3. Did the gateway match the request to a route?
+4. Did the mesh allow the gateway to reach the backend?
+5. Was the backend healthy enough to serve the request?
+
+### Failure Domain Map
 
 | Layer | Typical Failure | Symptom | First Check |
 |---|---|---|---|
 | Public ingress | DNS / public cert / VIP issue | Client cannot connect | DNS, F5 VIP, public cert |
-| Edge mTLS | Client/server cert validation failure | 4xx/5xx or TLS handshake failure between F5 and Gateway | Venafi certs, CA bundles, SNI |
-| Gateway routing | Route mismatch / listener issue | Request reaches gateway but not backend | Listener, HTTPRoute, host/path rules |
-| Mesh transport | Sidecar / intention / service identity issue | Upstream connect failure | Consul intentions, sidecars, mesh certs |
-| App workload | Backend unhealthy | 503 / failed readiness / timeout | Pod health, app logs, service endpoints |
+| Edge mTLS | Client/server cert validation failure | TLS handshake failure between F5 and Gateway | Venafi certs, CA bundles, SNI, SANs |
+| Gateway routing | Route mismatch / listener issue | Request reaches gateway but not backend | Listener, `HTTPRoute`, host/path rules |
+| Mesh transport | Sidecar / identity / intention issue | Upstream connect or authorization failure | Sidecars, Consul intentions, mesh certs |
+| App workload | Backend unhealthy | 503, timeout, readiness failure | Pod health, service endpoints, app logs |
 
-### Quick troubleshooting path
+### Quick Troubleshooting Path
 
 ```mermaid
 flowchart TD
     start([Issue observed]) --> q1{Can client reach F5?}
     q1 -- No --> a1[Check DNS, public cert, F5 VIP]
     q1 -- Yes --> q2{Does F5 establish mTLS to Gateway?}
-    q2 -- No --> a2[Check Venafi certs, CA bundles, SNI, TLS policy]
+    q2 -- No --> a2[Check Venafi certs, CA bundles, SNI, SANs, TLS policy]
     q2 -- Yes --> q3{Does Gateway route to backend?}
-    q3 -- No --> a3[Check listener, HTTPRoute, host/path matches]
+    q3 -- No --> a3[Check listener, HTTPRoute, host/path matching]
     q3 -- Yes --> q4{Does mesh connect to service?}
     q4 -- No --> a4[Check Consul intentions, sidecars, service identity]
     q4 -- Yes --> a5[Check backend health, readiness, app logs]
@@ -515,52 +439,71 @@ flowchart TD
 ## Observability
 
 ### F5
+
+Useful signals include:
+
 - TLS handshake metrics
-- Client-side and server-side connection counts
-- Certificate expiration monitoring
-- Virtual server and pool health
+- client-side and server-side connection counts
+- certificate expiration monitoring
+- virtual server and pool health
 
 ### API Gateway / Envoy
+
+Useful signals include:
+
 - TLS handshake failures
-- Upstream TLS connection totals
-- Request duration and latency metrics
-- Certificate expiration metrics
+- request rates
+- upstream connection failures
+- request latency
+- certificate expiration metrics where available
 
 ### Consul Service Mesh
-- Leaf certificate expiry metrics
-- Service-to-service request totals
-- Intention allow / deny counters
 
-## Operational Notes
+Useful signals include:
 
-> [!NOTE]
-> The backend application does **not** terminate TLS directly. TLS is terminated or enforced by infrastructure layers: F5 at the edge, API Gateway for ingress mTLS, and Consul sidecars for service mesh mTLS.
+- leaf certificate expiry
+- service-to-service request counts
+- intention allow / deny events
+- upstream cluster and connection health
 
-> [!TIP]
-> When debugging connectivity, check the failing boundary first:
->
-> - **External connectivity issues** → F5 public TLS and DNS
-> - **Ingress authentication issues** → F5 ↔ API Gateway Venafi mTLS
-> - **Backend communication issues** → Consul Connect mTLS and intentions
-
-<details>
-<summary>Implementation details preserved from the original design</summary>
+## Implementation Notes
 
 ### F5 to API Gateway boundary
-- F5 acts as the client when connecting to the API Gateway
-- API Gateway acts as the server on the ingress mTLS boundary
-- F5 validates the API Gateway certificate against the Venafi CA bundle
-- API Gateway validates the F5 client certificate against the trusted Venafi client CA bundle
-- SNI and hostname verification should remain enabled where supported
+
+- F5 acts as the client when connecting to the API Gateway.
+- API Gateway acts as the server on the ingress mTLS boundary.
+- F5 validates the gateway certificate against trusted Venafi CA material.
+- API Gateway validates the F5 client certificate against the trusted client CA bundle.
+- SNI and hostname verification should remain enabled where supported.
 
 ### API Gateway service shape
-- Service may be exposed using `LoadBalancer` or `NodePort` patterns depending on platform requirements
-- HTTPS listener commonly maps `443 → 8443`
-- Optional HTTP redirect listener commonly maps `80 → 8080`
+
+Depending on platform requirements, the gateway service may be exposed using:
+
+- `LoadBalancer`
+- `NodePort`
+- another pattern that preserves the desired mTLS boundary
+
+Common patterns include:
+
+- HTTPS listener exposed on `443`
+- optional HTTP redirect listener exposed on `80`
 
 ### Backend service shape
-- Backend service is typically exposed internally as `ClusterIP`
-- Application container commonly listens on port `8080`
-- Health endpoints may include `/health` and `/ready`
 
-</details>
+Typical expectations:
+
+- backend service exposed internally as `ClusterIP`
+- application container listens on an internal port such as `8080`
+- health endpoints may include paths like `/health` or `/ready`
+
+## What This Document Intentionally Covers That the Overview Does Not
+
+This deep-dive document is intentionally more detailed than [architecture.md](./architecture.md). It adds:
+
+- Kubernetes resource relationships
+- deployment topology
+- policy layers
+- certificate ownership and validation details
+- troubleshooting guidance
+- operational interpretation of each trust boundary
