@@ -4,13 +4,6 @@
 
 This document explains the architecture at a high level for readers who want to quickly understand how traffic enters the platform, where mutual TLS is enforced, and how requests reach backend services.
 
-Use this document if you are:
-
-- new to the repository
-- an application developer integrating with the platform
-- reviewing the design at a conceptual level
-- trying to understand the main trust boundaries without diving into platform implementation details
-
 If you want the operator-focused deployment view, Kubernetes resource relationships, PKI details, and troubleshooting flow, see [architecture-diagram.md](./architecture-diagram.md).
 
 ## Executive Summary
