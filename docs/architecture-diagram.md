@@ -59,6 +59,122 @@ flowchart LR
 - **Green**: internal service mesh trust domain
 - **Purple**: application workload
 
+## Kubernetes Deployment View
+
+This one-page view focuses on the **Kubernetes resources deployed in this repository** and how they relate to each other, while still showing the **F5 LTM** and **backend service** in the end-to-end path.
+
+```mermaid
+flowchart LR
+    client([🌐 External Client])
+    f5([🛡️ F5 LTM<br/>Public TLS + mTLS client])
+
+    subgraph cluster[☸️ OpenShift / Kubernetes Cluster]
+        direction LR
+
+        subgraph consulns[📦 Namespace: consul]
+            direction TB
+            gc([GatewayClass<br/>consul])
+            gcc([GatewayClassConfig<br/>3 replicas / LB service<br/>mTLS client validation])
+            gwsvc([Service<br/>api-gateway<br/>LoadBalancer 80 / 443])
+            gateway([Gateway<br/>api-gateway<br/>HTTPS + HTTP listeners])
+            gwcert([Secret / CA config<br/>api-gateway-tls<br/>venafi-f5-client-ca])
+            gwnp([NetworkPolicy<br/>api-gateway-ingress-f5-only])
+        end
+
+        subgraph defaultns[📦 Namespace: default]
+            direction TB
+            route([HTTPRoute<br/>backend-api-route])
+            intent([ServiceIntentions<br/>api-gateway-to-backend])
+            besvc([Service<br/>backend-service<br/>ClusterIP 8080])
+            bedeploy([Deployment<br/>backend<br/>3 replicas])
+            pods([Backend Pods<br/>App container + Consul sidecar])
+            sa([ServiceAccount<br/>backend-service])
+            hpa([HPA<br/>backend-hpa])
+            pdb([PDB<br/>backend-pdb])
+            benp([NetworkPolicy<br/>backend-service-ingress])
+        end
+
+        mesh([🔐 Consul Connect Service Mesh<br/>Gateway sidecar ↔ Backend sidecar])
+
+        gc --> gateway
+        gcc --> gateway
+        gwcert --> gateway
+        gwnp -. protects .-> gwsvc
+        gwsvc --> gateway
+
+        gateway --> route
+        route --> besvc
+        intent -. authorizes .-> besvc
+        gateway --> mesh
+        mesh --> besvc
+
+        besvc --> bedeploy
+        sa --> bedeploy
+        hpa --> bedeploy
+        pdb --> bedeploy
+        benp -. protects .-> bedeploy
+        bedeploy --> pods
+    end
+
+    client -->|HTTPS| f5
+    f5 -->|mTLS via Venafi PKI| gwsvc
+
+    classDef external fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;
+    classDef edgeClass fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef ingressClass fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#111827;
+    classDef meshClass fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+    classDef appClass fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
+    classDef policy fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#111827;
+    classDef aux fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827;
+
+    class client external;
+    class f5 edgeClass;
+    class gc,gcc,gwsvc,gateway,route ingressClass;
+    class mesh meshClass;
+    class besvc,bedeploy,pods,sa,hpa,pdb appClass;
+    class intent,gwnp,benp policy;
+    class gwcert aux;
+```
+
+### How to Read This Diagram
+
+- **F5 LTM** is external to the cluster and connects to the Kubernetes-hosted API Gateway over **mTLS**.
+- In the **`consul` namespace**, the repo defines the **Gateway API control and ingress resources**:
+  - `GatewayClass`
+  - `GatewayClassConfig`
+  - `Gateway`
+  - `Service` for the gateway
+  - TLS materials for server certificate and client CA validation
+  - Gateway-specific `NetworkPolicy`
+- In the **`default` namespace**, the repo defines the **application-facing resources**:
+  - `HTTPRoute`
+  - `ServiceIntentions`
+  - `backend-service` `Service`
+  - `backend` `Deployment`
+  - `ServiceAccount`
+  - `HorizontalPodAutoscaler`
+  - `PodDisruptionBudget`
+  - backend `NetworkPolicy`
+- **Consul Connect mTLS** protects gateway-to-backend communication inside the cluster.
+
+### Resource Relationship Summary
+
+| Resource | Role | Relationship |
+|---|---|---|
+| `GatewayClass` | Declares Consul as the Gateway API controller | Referenced by `Gateway` |
+| `GatewayClassConfig` | Configures gateway deployment/service/TLS behavior | Attached to `GatewayClass` |
+| `Gateway` | Defines listeners and ingress TLS/mTLS settings | Front door inside Kubernetes |
+| `api-gateway` Service | Exposes gateway listeners on ports 80/443 | Target for F5 connection |
+| `api-gateway-tls` / `venafi-f5-client-ca` | Server cert and trusted client CA material | Used by gateway TLS validation |
+| `HTTPRoute` | Maps incoming paths/hosts to backend service | Attached to `Gateway` |
+| `ServiceIntentions` | Authorizes gateway to call backend over mesh | Applies between gateway and backend |
+| `backend-service` Service | Stable in-cluster endpoint for backend pods | Referenced by route |
+| `backend` Deployment | Runs application replicas | Backed by Consul sidecar injection |
+| `ServiceAccount` | Workload identity for backend pods | Used by deployment |
+| `HPA` | Scales backend deployment | Targets `backend` |
+| `PDB` | Protects backend availability during disruption | Targets backend pods |
+| `NetworkPolicy` | Restricts ingress/egress paths | Protects gateway and backend workloads |
+
 ## Why This Architecture Exists
 
 This architecture separates external ingress security from internal service-to-service security:
@@ -418,7 +534,7 @@ flowchart TD
 ## Operational Notes
 
 > [!NOTE]
-> The backend application does **not** terminate TLS directly. TLS is terminated or enforced by infrastructure layers: F5 at the edge, API Gateway for ingress mTLS, and Consul sidecars for service mesh.
+> The backend application does **not** terminate TLS directly. TLS is terminated or enforced by infrastructure layers: F5 at the edge, API Gateway for ingress mTLS, and Consul sidecars for service mesh mTLS.
 
 > [!TIP]
 > When debugging connectivity, check the failing boundary first:
