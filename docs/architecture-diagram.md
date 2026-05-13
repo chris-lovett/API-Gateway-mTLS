@@ -1,20 +1,63 @@
 # API Gateway mTLS Architecture
 
+## Executive Overview
+
+```mermaid
+flowchart LR
+    client[External Clients]
+    f5[F5 Edge]
+    gateway[API Gateway]
+    backend[Backend Services]
+
+    client -->|HTTPS| f5
+    f5 -->|mTLS| gateway
+    gateway -->|Service Mesh mTLS| backend
+```
+
+### Executive Summary
+
+- **Clients connect securely** over standard HTTPS.
+- **F5 authenticates to the API Gateway** using **mutual TLS (mTLS)**.
+- **Internal service-to-service traffic** is protected separately by the **Consul service mesh**.
+- **Application teams do not manage edge TLS directly**.
+
 ## At a Glance
 
 ```mermaid
-flowchart TB
-    client[External Client<br/>Browser / Mobile / API Client]
-    f5[F5 Load Balancer<br/>Public TLS termination<br/>WAF / inspection]
-    gateway[Consul API Gateway<br/>Venafi server cert<br/>Validates F5 client cert]
-    mesh[Consul Connect Service Mesh<br/>Automatic mTLS]
-    backend[Backend Service<br/>Plain HTTP in app container]
+flowchart LR
+    client([🌐 External Client<br/>Browser / Mobile / API Client])
+    f5([🛡️ F5 Load Balancer<br/>Public TLS termination<br/>WAF / inspection])
+
+    subgraph cluster[☸️ OpenShift / Kubernetes Cluster]
+        direction LR
+        gateway([🚪 Consul API Gateway<br/>Venafi server cert<br/>Validates F5 client cert])
+        mesh([🔐 Consul Connect Service Mesh<br/>Automatic workload mTLS])
+        backend([📦 Backend Service<br/>Plain HTTP only inside pod])
+    end
 
     client -->|HTTPS<br/>Public CA| f5
-    f5 -->|mTLS<br/>Venafi PKI| gateway
+    f5 -->|mTLS<br/>Venafi PKI<br/>Primary security boundary| gateway
     gateway -->|mTLS<br/>Consul CA| mesh
-    mesh --> backend
+    mesh -->|localhost HTTP| backend
+
+    classDef edge fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px,color:#111827;
+    classDef ingress fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef meshClass fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#111827;
+    classDef app fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#111827;
+
+    class client edge;
+    class f5 ingress;
+    class gateway ingress;
+    class mesh meshClass;
+    class backend app;
 ```
+
+### Diagram Legend
+
+- **Blue**: external client entry point
+- **Orange**: edge ingress and primary mTLS trust boundary
+- **Green**: internal service mesh trust domain
+- **Purple**: application workload
 
 ## Why This Architecture Exists
 
