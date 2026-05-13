@@ -1,6 +1,8 @@
 # F5 LTM to Consul API Gateway mTLS Configuration
 
-This repository contains configuration files and best practices for implementing end-to-end mutual TLS (mTLS) between F5 Load Balancers and Consul API Gateway on OpenShift, using Venafi-issued certificates.
+This repository provides reference configuration, automation, and operator guidance for implementing end-to-end mutual TLS (mTLS) between F5 LTM and Consul API Gateway on OpenShift using Venafi-issued certificates.
+
+It is intended for platform teams that need to secure north-south traffic at the edge, enforce authenticated ingress into the cluster, and preserve Consul Connect mTLS for service-to-service communication deeper in the environment.
 
 ## Architecture Overview
 
@@ -14,65 +16,76 @@ This repository contains configuration files and best practices for implementing
 [Backend Services]
 ```
 
-This pattern gives platform operators a clear separation of responsibilities across the ingress path:
+From an operator point of view, this architecture separates trust domains while maintaining a secure request path end to end:
 
-- **External TLS is terminated at F5** using the certificate and policy appropriate for north-south traffic.
-- **F5 re-encrypts upstream traffic with mTLS** so the connection to Consul API Gateway is authenticated on both sides.
-- **Consul API Gateway enforces trusted ingress into the cluster** and hands traffic into the service mesh.
-- **Backend services continue to use Consul Connect mTLS** for east-west communication.
+- **External TLS terminates at F5** using the certificate, policies, and controls appropriate for internet-facing traffic.
+- **F5 re-encrypts traffic to Consul API Gateway with mTLS** so both sides authenticate each other before traffic enters the cluster.
+- **Consul API Gateway acts as the trusted ingress boundary** for cluster traffic and hands requests into the mesh.
+- **Backend services continue to rely on Consul Connect mTLS** for east-west security inside the platform.
 
-In practice, this means the edge, ingress, and service-mesh trust domains remain distinct while still participating in a secure end-to-end request path.
+This separation lets operators manage edge certificates, gateway trust, and mesh identity independently without collapsing them into a single PKI boundary.
 
 ## Key Principles
 
-1. **Terminate and Re-encrypt**: F5 terminates external TLS and re-encrypts with mTLS to API Gateway
-2. **Separate PKI Hierarchies**: Venafi for edge ingress, Consul CA for service mesh
-3. **Mutual Authentication**: Both F5 and API Gateway validate each other's certificates
-4. **Automated Rotation**: Certificates managed through Venafi with automated renewal
+These principles shape the configuration in this repository:
+
+1. **Terminate and re-encrypt**  
+   F5 handles external TLS, then establishes a new mutually authenticated TLS session to the API Gateway.
+
+2. **Use separate PKI hierarchies**  
+   Venafi is used for the F5-to-gateway trust relationship, while Consul CA continues to manage service mesh identity.
+
+3. **Require mutual authentication**  
+   F5 validates the gateway certificate, and the gateway validates the F5 client certificate.
+
+4. **Design for rotation**  
+   Certificates should be short-lived, centrally managed, and renewable with minimal operational disruption.
 
 ## Repository Structure
 
+The repository is organized around the operator workflow of issuing certificates, configuring the edge, deploying the gateway, and validating the result.
+
 ```
 .
-├── README.md                          # This file
-├── docs/                              # Documentation
-│   ├── architecture.md                # Detailed architecture guide
-│   ├── best-practices.md              # Security best practices
-│   ├── troubleshooting.md             # Troubleshooting guide
-│   └── certificate-rotation.md        # Certificate lifecycle management
-├── venafi/                            # Venafi certificate configurations
-│   ├── policies/                      # Venafi policy definitions
-│   ├── scripts/                       # Certificate request/renewal scripts
-│   └── examples/                      # Example certificate requests
-├── f5/                                # F5 LTM configurations
-│   ├── ssl-profiles/                  # SSL profile configurations
+├── README.md                          # Overview and quickstart
+├── docs/                              # Supporting documentation
+│   ├── architecture.md                # Detailed architecture guidance
+│   ├── best-practices.md              # Security and operational guidance
+│   ├── troubleshooting.md             # Common issues and fixes
+│   └── certificate-rotation.md        # Certificate lifecycle guidance
+├── venafi/                            # Venafi certificate policies and automation
+│   ├── policies/                      # Certificate policy definitions
+│   ├── scripts/                       # Certificate request and renewal scripts
+│   └── examples/                      # Example request payloads and usage
+├── f5/                                # F5 LTM configuration artifacts
+│   ├── ssl-profiles/                  # Client and server SSL profiles
 │   ├── virtual-servers/               # Virtual server definitions
-│   ├── pools/                         # Pool configurations
+│   ├── pools/                         # Backend pool configuration
 │   └── scripts/                       # F5 automation scripts
 ├── consul-gateway/                    # Consul API Gateway manifests
 │   ├── gateway.yaml                   # Gateway configuration
-│   ├── gateway-class.yaml             # GatewayClass configuration
+│   ├── gateway-class.yaml             # GatewayClass definition
 │   ├── routes/                        # HTTPRoute definitions
 │   └── intentions/                    # Service intentions
-├── kubernetes/                        # Kubernetes/OpenShift resources
+├── kubernetes/                        # Supporting Kubernetes/OpenShift resources
 │   ├── secrets/                       # Secret templates
 │   ├── configmaps/                    # ConfigMap templates
-│   ├── network-policies/              # NetworkPolicy definitions
+│   ├── network-policies/              # Network policy definitions
 │   ├── services/                      # Service definitions
 │   └── deployments/                   # Deployment manifests
-├── monitoring/                        # Monitoring and alerting
-│   ├── prometheus/                    # Prometheus rules
+├── monitoring/                        # Monitoring and alerting assets
+│   ├── prometheus/                    # Prometheus rules and queries
 │   ├── grafana/                       # Grafana dashboards
 │   └── alerts/                        # Alert definitions
-├── scripts/                           # Automation scripts
-│   ├── deploy.sh                      # Deployment script
-│   ├── verify.sh                      # Verification script
-│   ├── rotate-certs.sh                # Certificate rotation
+├── scripts/                           # End-to-end automation helpers
+│   ├── deploy.sh                      # Deploy gateway-side resources
+│   ├── verify.sh                      # Validate the deployment
+│   ├── rotate-certs.sh                # Rotate certificates
 │   └── troubleshoot.sh                # Troubleshooting helper
-└── examples/                          # Complete examples
-    ├── basic/                         # Basic setup
-    ├── production/                    # Production-ready setup
-    └── testing/                       # Testing configurations
+└── examples/                          # End-to-end examples
+    ├── basic/                         # Minimal working setup
+    ├── production/                    # Production-oriented example
+    └── testing/                       # Validation and test scenarios
 ```
 
 ## Quick Start
@@ -190,98 +203,139 @@ At the end of this step, you should have confidence that the deployment is not o
 
 ## Configuration Files
 
-### Venafi Certificates
+The following files are the main building blocks for the reference implementation. They are grouped by the operational concern they support.
 
-- [`venafi/policies/gateway-server-policy.json`](venafi/policies/gateway-server-policy.json) - API Gateway server certificate policy
-- [`venafi/policies/f5-client-policy.json`](venafi/policies/f5-client-policy.json) - F5 client certificate policy
-- [`venafi/scripts/request-gateway-cert.sh`](venafi/scripts/request-gateway-cert.sh) - Request gateway certificate
-- [`venafi/scripts/request-f5-client-cert.sh`](venafi/scripts/request-f5-client-cert.sh) - Request F5 client certificate
+### Venafi certificate assets
 
-### F5 Configuration
+These files define how certificates are requested and managed for the F5-to-gateway trust relationship:
 
-- [`f5/ssl-profiles/client-ssl-profile.tmsh`](f5/ssl-profiles/client-ssl-profile.tmsh) - Client-side SSL profile
-- [`f5/ssl-profiles/server-ssl-profile.tmsh`](f5/ssl-profiles/server-ssl-profile.tmsh) - Server-side SSL profile (mTLS)
-- [`f5/virtual-servers/api-gateway-vs.tmsh`](f5/virtual-servers/api-gateway-vs.tmsh) - Virtual server configuration
-- [`f5/pools/api-gateway-pool.tmsh`](f5/pools/api-gateway-pool.tmsh) - Backend pool configuration
+- [`venafi/policies/gateway-server-policy.json`](venafi/policies/gateway-server-policy.json) - Policy used to issue the API Gateway server certificate
+- [`venafi/policies/f5-client-policy.json`](venafi/policies/f5-client-policy.json) - Policy used to issue the F5 client certificate
+- [`venafi/scripts/request-gateway-cert.sh`](venafi/scripts/request-gateway-cert.sh) - Script that requests the gateway certificate
+- [`venafi/scripts/request-f5-client-cert.sh`](venafi/scripts/request-f5-client-cert.sh) - Script that requests the F5 client certificate
 
-### Consul API Gateway
+### F5 configuration assets
 
-- [`consul-gateway/gateway.yaml`](consul-gateway/gateway.yaml) - Gateway with mTLS client validation
+These files define how F5 handles external TLS, upstream mTLS, and traffic forwarding:
+
+- [`f5/ssl-profiles/client-ssl-profile.tmsh`](f5/ssl-profiles/client-ssl-profile.tmsh) - SSL profile for client-facing traffic
+- [`f5/ssl-profiles/server-ssl-profile.tmsh`](f5/ssl-profiles/server-ssl-profile.tmsh) - SSL profile for upstream mTLS to the gateway
+- [`f5/virtual-servers/api-gateway-vs.tmsh`](f5/virtual-servers/api-gateway-vs.tmsh) - Virtual server definition for ingress traffic
+- [`f5/pools/api-gateway-pool.tmsh`](f5/pools/api-gateway-pool.tmsh) - Pool definition for forwarding traffic to the gateway
+
+### Consul API Gateway assets
+
+These manifests define the gateway resources that receive and route traffic inside the cluster:
+
+- [`consul-gateway/gateway.yaml`](consul-gateway/gateway.yaml) - Gateway definition with client certificate validation
 - [`consul-gateway/gateway-class.yaml`](consul-gateway/gateway-class.yaml) - GatewayClass configuration
-- [`consul-gateway/routes/backend-route.yaml`](consul-gateway/routes/backend-route.yaml) - Example HTTPRoute
-- [`consul-gateway/intentions/gateway-to-backend.yaml`](consul-gateway/intentions/gateway-to-backend.yaml) - Service intentions
+- [`consul-gateway/routes/backend-route.yaml`](consul-gateway/routes/backend-route.yaml) - Example route to a backend service
+- [`consul-gateway/intentions/gateway-to-backend.yaml`](consul-gateway/intentions/gateway-to-backend.yaml) - Service intention controlling gateway-to-backend access
 
-### Kubernetes Resources
+### Kubernetes and OpenShift assets
 
-- [`kubernetes/secrets/gateway-tls-secret.yaml`](kubernetes/secrets/gateway-tls-secret.yaml) - Gateway TLS secret template
-- [`kubernetes/configmaps/venafi-ca-bundle.yaml`](kubernetes/configmaps/venafi-ca-bundle.yaml) - Venafi CA bundle
-- [`kubernetes/network-policies/gateway-ingress.yaml`](kubernetes/network-policies/gateway-ingress.yaml) - Network policy for F5 access
-- [`kubernetes/services/gateway-service.yaml`](kubernetes/services/gateway-service.yaml) - Gateway service definition
+These resources support certificate distribution, service exposure, and network controls around the gateway:
+
+- [`kubernetes/secrets/gateway-tls-secret.yaml`](kubernetes/secrets/gateway-tls-secret.yaml) - Template for the gateway TLS secret
+- [`kubernetes/configmaps/venafi-ca-bundle.yaml`](kubernetes/configmaps/venafi-ca-bundle.yaml) - ConfigMap containing the Venafi CA bundle
+- [`kubernetes/network-policies/gateway-ingress.yaml`](kubernetes/network-policies/gateway-ingress.yaml) - NetworkPolicy restricting ingress to approved F5 sources
+- [`kubernetes/services/gateway-service.yaml`](kubernetes/services/gateway-service.yaml) - Service definition exposing the gateway
 
 ## Security Best Practices
 
-1. **Use Separate PKI Hierarchies**
-   - Venafi for F5 ↔ API Gateway
-   - Consul CA for service mesh
+This repository assumes that operators want strong trust boundaries, minimal blast radius, and manageable certificate operations.
 
-2. **Restrict Trust Boundaries**
-   - Use dedicated Venafi intermediate CA
-   - Don't trust full enterprise root bundle
+1. **Use separate PKI hierarchies**
+   - Use Venafi for the F5 ↔ API Gateway connection
+   - Use Consul CA for service mesh identity
+   - Avoid reusing the same trust anchor for both ingress and mesh traffic
 
-3. **Short-Lived Certificates**
-   - 30-90 day validity
-   - Automated rotation
+2. **Restrict trust boundaries**
+   - Prefer a dedicated Venafi intermediate CA for this integration
+   - Avoid trusting a broad enterprise root bundle when a narrower trust scope is sufficient
 
-4. **Strict Validation**
-   - Require client certificates
-   - Validate SANs and subjects
-   - Enable hostname verification
+3. **Use short-lived certificates**
+   - Target 30-90 day validity periods where practical
+   - Reduce long-lived credential exposure
+   - Pair shorter lifetimes with an operational rotation process
 
-5. **Network Segmentation**
-   - NetworkPolicies to restrict F5 access
-   - Source IP restrictions
+4. **Enforce strict validation**
+   - Require client certificates on the gateway-facing connection
+   - Validate SANs, subjects, and chain of trust
+   - Enable hostname verification where supported
+
+5. **Segment network access**
+   - Use NetworkPolicies to limit which source addresses can reach the gateway
+   - Restrict exposure to the minimum set of trusted ingress sources
 
 ## Certificate Lifecycle
 
+A secure deployment is not just about initial issuance. Operators also need a predictable lifecycle for renewal, rollout, and monitoring.
+
 ### Issuance
-1. Request certificate from Venafi using policy
-2. Store in Kubernetes secret (Gateway) or F5 (client)
-3. Deploy/apply configuration
+
+During initial setup, the certificate flow typically looks like this:
+
+1. Request certificates from Venafi using the appropriate policies
+2. Store the gateway certificate in Kubernetes and the client certificate on F5
+3. Apply or update the relevant gateway and F5 configuration
 
 ### Rotation
-1. Automated via Venafi agent (Gateway)
-2. CronJob or manual process (F5)
-3. Zero-downtime rotation
+
+For ongoing operations, plan for rotation from the beginning:
+
+1. Automate gateway-side renewal where possible using Venafi-integrated workflows
+2. Use a scheduled or documented operational process for F5 certificate replacement
+3. Rotate certificates in a way that avoids unnecessary downtime or trust gaps
 
 ### Monitoring
-- Certificate expiration alerts (15 days)
-- TLS handshake failure alerts
-- Prometheus metrics
+
+Operators should monitor both certificate health and connection behavior:
+
+- Alert on certificate expiration before the renewal window closes, such as 15 days out
+- Monitor TLS handshake failures for early signs of trust or configuration problems
+- Expose metrics into Prometheus and dashboards for operational visibility
 
 ## Troubleshooting
 
-Common issues and solutions:
+When this pattern fails, the most common causes are networking, certificate trust, or client authentication settings.
 
-### Connection Refused
-- Check NetworkPolicy allows F5 source IPs
-- Verify Gateway service is exposed correctly
-- Test connectivity: `telnet gateway-ip 443`
+### Connection refused
 
-### TLS Handshake Failure
-- Verify certificate validity: `openssl x509 -in cert.crt -noout -dates`
-- Check certificate chain: `openssl verify -CAfile ca.crt cert.crt`
-- Validate SANs match: `openssl x509 -in cert.crt -noout -text | grep DNS`
+A refused connection usually indicates the traffic path is not open or the gateway is not reachable.
 
-### Client Certificate Not Required
-- Verify Gateway configuration has `require_client_certificate: true`
-- Check Venafi CA bundle is mounted correctly
-- Test without client cert (should fail)
+Checks to perform:
+- Confirm the NetworkPolicy allows traffic from the F5 source IP range
+- Verify the gateway Service is exposed on the expected port
+- Test basic connectivity to the gateway endpoint with `telnet gateway-ip 443`
 
-See [`docs/troubleshooting.md`](docs/troubleshooting.md) for detailed troubleshooting guide.
+### TLS handshake failure
+
+A handshake failure typically means one side does not trust the certificate presented by the other, or the certificate identity is incorrect.
+
+Checks to perform:
+- Verify certificate validity dates: `openssl x509 -in cert.crt -noout -dates`
+- Validate the certificate chain: `openssl verify -CAfile ca.crt cert.crt`
+- Confirm SAN values and expected identity: `openssl x509 -in cert.crt -noout -text | grep DNS`
+
+### Client certificate not required
+
+If a connection succeeds when it should require mTLS, the gateway is likely not enforcing client authentication correctly.
+
+Checks to perform:
+- Verify the gateway configuration includes `require_client_certificate: true`
+- Confirm the Venafi CA bundle is mounted and referenced correctly
+- Test the connection without presenting a client certificate; it should fail
+
+For deeper investigation, see [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ## Monitoring
 
-### Prometheus Metrics
+Operators should treat certificate health and TLS behavior as first-class platform signals.
+
+### Prometheus metrics
+
+These example queries can help track expiration risk, handshake failures, and encrypted connection volume:
 
 ```promql
 # Certificate expiration
@@ -294,27 +348,36 @@ rate(envoy_ssl_connection_error{namespace="consul"}[5m])
 envoy_cluster_ssl_connection_total{cluster_name="local_app"}
 ```
 
-### Grafana Dashboards
+### Grafana dashboards
 
-- [`monitoring/grafana/mtls-overview.json`](monitoring/grafana/mtls-overview.json) - mTLS overview dashboard
-- [`monitoring/grafana/certificate-expiration.json`](monitoring/grafana/certificate-expiration.json) - Certificate monitoring
+The repository also includes example dashboards for day-two visibility:
+
+- [`monitoring/grafana/mtls-overview.json`](monitoring/grafana/mtls-overview.json) - Dashboard for overall mTLS health and behavior
+- [`monitoring/grafana/certificate-expiration.json`](monitoring/grafana/certificate-expiration.json) - Dashboard focused on certificate age and expiration windows
 
 ## Examples
 
-### Basic Setup
-See [`examples/basic/`](examples/basic/) for a minimal working configuration.
+The examples directory provides starting points for different levels of operational maturity.
 
-### Production Setup
-See [`examples/production/`](examples/production/) for production-ready configuration with:
-- High availability
-- Automated certificate rotation
-- Comprehensive monitoring
-- Network policies
+### Basic setup
+
+See [`examples/basic/`](examples/basic/) for a minimal working configuration that demonstrates the core F5-to-gateway mTLS flow.
+
+### Production setup
+
+See [`examples/production/`](examples/production/) for a more production-oriented configuration, including:
+- high availability,
+- automated certificate rotation,
+- broader monitoring coverage, and
+- stricter network controls.
 
 ### Testing
-See [`examples/testing/`](examples/testing/) for test configurations and validation scripts.
+
+See [`examples/testing/`](examples/testing/) for validation scenarios and supporting scripts you can use during rollout and troubleshooting.
 
 ## Contributing
+
+Contributions are welcome. If you want to improve the reference implementation:
 
 1. Fork the repository
 2. Create a feature branch
@@ -324,8 +387,9 @@ See [`examples/testing/`](examples/testing/) for test configurations and validat
 
 ## Support
 
-For issues or questions:
-1. Check [`docs/troubleshooting.md`](docs/troubleshooting.md)
+If you run into problems or want to understand the design in more depth:
+
+1. Review [`docs/troubleshooting.md`](docs/troubleshooting.md)
 2. Review [`docs/best-practices.md`](docs/best-practices.md)
 3. Open an issue in this repository
 
