@@ -14,6 +14,15 @@ This repository contains configuration files and best practices for implementing
 [Backend Services]
 ```
 
+This pattern gives platform operators a clear separation of responsibilities across the ingress path:
+
+- **External TLS is terminated at F5** using the certificate and policy appropriate for north-south traffic.
+- **F5 re-encrypts upstream traffic with mTLS** so the connection to Consul API Gateway is authenticated on both sides.
+- **Consul API Gateway enforces trusted ingress into the cluster** and hands traffic into the service mesh.
+- **Backend services continue to use Consul Connect mTLS** for east-west communication.
+
+In practice, this means the edge, ingress, and service-mesh trust domains remain distinct while still participating in a secure end-to-end request path.
+
 ## Key Principles
 
 1. **Terminate and Re-encrypt**: F5 terminates external TLS and re-encrypts with mTLS to API Gateway
@@ -68,7 +77,18 @@ This repository contains configuration files and best practices for implementing
 
 ## Quick Start
 
+This quickstart walks through how to stand up a secure ingress path from F5 LTM to Consul API Gateway using mutual TLS. It is written for platform operators who want to understand both **what they are doing** and **which commands to run**.
+
+By the end of this process, you will have:
+
+- requested and generated the certificates needed for mutual authentication,
+- configured F5 to terminate external TLS and re-establish trust upstream,
+- deployed Consul API Gateway with the required certificates and trust bundles, and
+- verified that traffic is flowing securely from the edge into the mesh.
+
 ### Prerequisites
+
+Before you begin, make sure you have access to all systems involved in the trust chain:
 
 - F5 LTM with admin access
 - OpenShift cluster with Consul deployed
@@ -77,42 +97,96 @@ This repository contains configuration files and best practices for implementing
 - `vcert` CLI tool
 - `tmsh` access to F5
 
-### 1. Issue Certificates from Venafi
+It is also helpful to clone the repository locally so you can run the scripts directly:
 
 ```bash
-# Issue API Gateway server certificate
+git clone https://github.com/chris-lovett/API-Gateway-mTLS.git
+cd API-Gateway-mTLS
+```
+
+### 1. Issue certificates from Venafi
+
+The first step is to establish identity on both sides of the F5-to-gateway connection.
+
+At this stage, you are creating:
+- a **server certificate** for the Consul API Gateway, so F5 can verify the gateway it connects to, and
+- a **client certificate** for F5, so the gateway can require F5 to authenticate with a trusted certificate.
+
+This is the foundation for mutual TLS between the load balancer and the gateway.
+
+Run:
+
+```bash
 cd venafi/scripts
 ./request-gateway-cert.sh
-
-# Issue F5 client certificate
 ./request-f5-client-cert.sh
+cd ../..
 ```
 
-### 2. Configure F5 LTM
+When this step is complete, you should have the certificate artifacts needed to configure both the gateway and F5.
+
+### 2. Configure F5 LTM as the secure edge and upstream mTLS client
+
+Next, configure F5 so it can accept external HTTPS traffic and then re-encrypt upstream traffic to Consul API Gateway using mTLS.
+
+Operationally, this step:
+- uploads the relevant certificates and keys to F5,
+- configures the SSL profiles that define how inbound and outbound TLS are handled, and
+- creates the virtual server and pool that forward traffic to the gateway.
+
+In other words, F5 becomes the edge entry point for clients and the authenticated client of the API Gateway.
+
+Run:
 
 ```bash
-# Upload certificates to F5
 cd f5/scripts
 ./upload-certs.sh
-
-# Configure SSL profiles and virtual server
 ./configure-f5.sh
+cd ../..
 ```
 
-### 3. Deploy Consul API Gateway
+After this step, F5 should be prepared to initiate a mutually authenticated TLS session to the gateway.
+
+### 3. Deploy Consul API Gateway with the required trust material
+
+With F5 ready, the next step is to configure the cluster-side ingress components.
+
+From an operator’s perspective, this step:
+- creates Kubernetes secrets and related configuration for the gateway certificate and CA material,
+- deploys the Consul API Gateway resources, and
+- enables the gateway to validate incoming client certificates rather than accepting anonymous upstream connections.
+
+This is where the cluster becomes ready to trust only approved upstream clients such as F5.
+
+Run:
 
 ```bash
-# Create secrets and deploy gateway
 cd scripts
 ./deploy.sh
+cd ..
 ```
 
-### 4. Verify Configuration
+After deployment, the gateway should be present in the cluster and configured to participate in the intended trust model.
+
+### 4. Verify the end-to-end configuration
+
+The final step is to confirm that the secure ingress path is actually working as designed.
+
+This verification step should validate that:
+- the certificates were issued and installed correctly,
+- F5 can successfully establish mTLS to the API Gateway,
+- the gateway requires and validates client certificates, and
+- requests can continue onward to backend services through Consul.
+
+Run:
 
 ```bash
-# Run verification tests
+cd scripts
 ./verify.sh
+cd ..
 ```
+
+At the end of this step, you should have confidence that the deployment is not only present, but correctly enforcing trust across the ingress path.
 
 ## Configuration Files
 
