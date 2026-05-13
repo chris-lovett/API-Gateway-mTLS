@@ -68,6 +68,86 @@ This architecture separates external ingress security from internal service-to-s
 - **API Gateway → Backend Service** uses **Consul Connect mTLS** with **Consul-issued identities**.
 - **Backend applications** stay simple by receiving plain HTTP only from their local sidecar.
 
+## End-to-End Reference Architecture
+
+```mermaid
+flowchart LR
+    %% Entry
+    client([🌐 External Client<br/>Browser / Mobile / API Consumer])
+    dns([🧭 DNS<br/>api.example.com])
+
+    %% Edge
+    subgraph edge[🛡️ Edge / DMZ]
+        direction TB
+        f5in([F5 Virtual Server<br/>Inbound TLS / Public CA])
+        waf([WAF / Inspection / Policy])
+        f5out([F5 Server SSL Profile<br/>mTLS client to Gateway<br/>Venafi client cert])
+    end
+
+    %% Cluster
+    subgraph cluster[☸️ OpenShift / Kubernetes Cluster]
+        direction LR
+
+        subgraph ingress[🚪 Ingress Layer]
+            direction TB
+            gwsvc([Gateway Service<br/>LoadBalancer / NodePort])
+            gateway([Consul API Gateway<br/>HTTPS Listener<br/>Venafi server cert])
+            routes([HTTPRoute Rules<br/>Path / Header / Split])
+        end
+
+        subgraph mesh[🔐 Consul Connect Mesh]
+            direction TB
+            gwsidecar([Gateway Envoy Sidecar<br/>Consul identity])
+            meshmtls([Service Mesh mTLS<br/>Consul CA])
+            beSidecar([Backend Envoy Sidecar<br/>Consul identity])
+        end
+
+        subgraph app[📦 Application Layer]
+            direction TB
+            backend([Backend Service<br/>ClusterIP])
+            pod([App Container<br/>localhost HTTP only])
+            health([Health / Ready Endpoints])
+        end
+    end
+
+    %% Flow
+    client -->|1. HTTPS| dns
+    dns -->|2. Resolve / Route| f5in
+    f5in --> waf
+    waf -->|3. Inspect / enforce| f5out
+    f5out -->|4. mTLS via Venafi PKI| gwsvc
+    gwsvc --> gateway
+    gateway --> routes
+    routes -->|5. Route selected request| gwsidecar
+    gwsidecar -->|6. Consul Connect mTLS| meshmtls
+    meshmtls --> beSidecar
+    beSidecar -->|7. localhost HTTP| backend
+    backend --> pod
+    pod --> health
+
+    %% Response flow hints
+    pod -. 8. Response .-> beSidecar
+    beSidecar -. 9. Mesh return path .-> gwsidecar
+    gwsidecar -. 10. Gateway response .-> gateway
+    gateway -. 11. F5 return path .-> f5out
+    f5out -. 12. HTTPS response .-> client
+
+    %% Styles
+    classDef external fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;
+    classDef edgeClass fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef ingressClass fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#111827;
+    classDef meshClass fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+    classDef appClass fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
+    classDef aux fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827;
+
+    class client,dns external;
+    class f5in,waf,f5out edgeClass;
+    class gwsvc,gateway,routes ingressClass;
+    class gwsidecar,meshmtls,beSidecar meshClass;
+    class backend,pod appClass;
+    class health aux;
+```
+
 ## Trust Boundaries
 
 | Boundary | Connection | TLS Mode | Trust Source | Purpose |
@@ -78,6 +158,68 @@ This architecture separates external ingress security from internal service-to-s
 
 > [!IMPORTANT]
 > The primary security boundary is **F5 → API Gateway**. This is where mutual authentication is enforced using Venafi-issued certificates.
+
+## Zoom-In by Layer
+
+### 1. Edge Ingress and Public TLS
+
+```mermaid
+flowchart LR
+    client([🌐 Client]) -->|HTTPS / Public CA| f5tls([🛡️ F5 Client SSL Profile])
+    f5tls --> waf([🔎 WAF / Inspection / Policy])
+    waf --> vip([📍 Virtual Server / VIP])
+
+    classDef blue fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#111827;
+    classDef orange fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    class client blue;
+    class f5tls,waf,vip orange;
+```
+
+Key points:
+- Public clients connect to `api.example.com` over HTTPS.
+- F5 terminates public TLS and can apply WAF, inspection, or rate limiting.
+- This layer protects the public edge but is **not** the primary mutual-authentication boundary.
+
+### 2. Primary Security Boundary: F5 → API Gateway mTLS
+
+```mermaid
+flowchart LR
+    f5([🛡️ F5<br/>Client cert]) -->|mTLS<br/>Venafi PKI| gateway([🚪 API Gateway<br/>Server cert])
+    ca1([🏛️ Venafi CA<br/>Validates gateway]) -.-> f5
+    ca2([🏛️ Venafi Client CA<br/>Validates F5]) -.-> gateway
+
+    classDef orange fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef gray fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827;
+    class f5,gateway orange;
+    class ca1,ca2 gray;
+```
+
+Key points:
+- F5 acts as the **TLS client** when connecting to the API Gateway.
+- The API Gateway presents a **Venafi-issued server certificate**.
+- F5 presents a **Venafi-issued client certificate**.
+- Both sides validate identity before traffic is allowed.
+
+### 3. Internal East-West Service Mesh
+
+```mermaid
+flowchart LR
+    gateway([🚪 Gateway]) --> sidecar1([🔐 Gateway Sidecar])
+    sidecar1 -->|Consul Connect mTLS| sidecar2([🔐 Backend Sidecar])
+    sidecar2 -->|localhost HTTP| app([📦 App Container])
+
+    classDef yellow fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#111827;
+    classDef green fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+    classDef purple fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
+    class gateway yellow;
+    class sidecar1,sidecar2 green;
+    class app purple;
+```
+
+Key points:
+- Internal traffic uses **Consul Connect mTLS**, not Venafi ingress certificates.
+- Sidecars handle encryption and identity automatically.
+- The application container can remain plain HTTP internally.
 
 ## Request Flow
 
@@ -98,6 +240,18 @@ This architecture separates external ingress security from internal service-to-s
 
 6. **Response path**  
    The response returns over the same layers in reverse: backend mesh → gateway → F5 → external client.
+
+## Step-by-Step Reference Table
+
+| Step | From | To | Protocol | Identity / Certificate | What Happens |
+|---|---|---|---|---|---|
+| 1 | Client | DNS / F5 | HTTPS | Public CA | Client resolves and initiates secure connection |
+| 2 | F5 inbound | F5 processing | TLS terminated | Public server cert on F5 | Edge TLS is terminated and inspected |
+| 3 | F5 outbound | API Gateway service | mTLS | F5 client cert + Gateway server cert | Mutual authentication enforced |
+| 4 | API Gateway | Route engine | HTTPS request context | Gateway listener policy | Path/header routing decision made |
+| 5 | Gateway sidecar | Backend sidecar | mTLS | Consul identities | Mesh encryption and authorization |
+| 6 | Backend sidecar | App container | HTTP | localhost only | Plain HTTP delivered internally |
+| 7 | App | Return path | Reverse of above | Same trust layers | Response returns to caller |
 
 ## Core Components
 
@@ -141,6 +295,29 @@ The environment uses **two separate PKI domains**:
 1. **Venafi PKI** for ingress trust between F5 and API Gateway
 2. **Consul PKI** for east-west service mesh trust
 
+### PKI Relationship Map
+
+```mermaid
+flowchart TB
+    venafi([🏛️ Venafi PKI<br/>Ingress trust domain])
+    publicca([🌍 Public CA<br/>Internet-facing trust])
+    consulca([🔐 Consul CA<br/>Mesh trust domain])
+
+    publicca --> f5pub([F5 public server cert])
+    venafi --> f5client([F5 client cert])
+    venafi --> gwserver([Gateway server cert])
+    consulca --> gwleaf([Gateway sidecar leaf cert])
+    consulca --> beleaf([Backend sidecar leaf cert])
+
+    classDef public fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#111827;
+    classDef ingress fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#111827;
+    classDef mesh fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+
+    class publicca,f5pub public;
+    class venafi,f5client,gwserver ingress;
+    class consulca,gwleaf,beleaf mesh;
+```
+
 ### Venafi PKI: Edge Ingress Trust
 
 | Certificate | Used By | Purpose | Rotation / Lifetime | Storage |
@@ -183,6 +360,41 @@ This PKI domain is intentionally separate from the Venafi ingress PKI.
 - Explicitly allow `api-gateway → backend-service`
 - Restrict paths and methods where needed
 - Deny all unspecified sources by default
+
+## Operational Views
+
+### Failure domain map
+
+| Layer | Typical Failure | Symptom | First Check |
+|---|---|---|---|
+| Public ingress | DNS / public cert / VIP issue | Client cannot connect | DNS, F5 VIP, public cert |
+| Edge mTLS | Client/server cert validation failure | 4xx/5xx or TLS handshake failure between F5 and Gateway | Venafi certs, CA bundles, SNI |
+| Gateway routing | Route mismatch / listener issue | Request reaches gateway but not backend | Listener, HTTPRoute, host/path rules |
+| Mesh transport | Sidecar / intention / service identity issue | Upstream connect failure | Consul intentions, sidecars, mesh certs |
+| App workload | Backend unhealthy | 503 / failed readiness / timeout | Pod health, app logs, service endpoints |
+
+### Quick troubleshooting path
+
+```mermaid
+flowchart TD
+    start([Issue observed]) --> q1{Can client reach F5?}
+    q1 -- No --> a1[Check DNS, public cert, F5 VIP]
+    q1 -- Yes --> q2{Does F5 establish mTLS to Gateway?}
+    q2 -- No --> a2[Check Venafi certs, CA bundles, SNI, TLS policy]
+    q2 -- Yes --> q3{Does Gateway route to backend?}
+    q3 -- No --> a3[Check listener, HTTPRoute, host/path matches]
+    q3 -- Yes --> q4{Does mesh connect to service?}
+    q4 -- No --> a4[Check Consul intentions, sidecars, service identity]
+    q4 -- Yes --> a5[Check backend health, readiness, app logs]
+
+    classDef gray fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827;
+    classDef red fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#111827;
+    classDef green fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#111827;
+
+    class start,q1,q2,q3,q4 gray;
+    class a1,a2,a3,a4 red;
+    class a5 green;
+```
 
 ## Observability
 
