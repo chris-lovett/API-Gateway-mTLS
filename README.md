@@ -6,14 +6,25 @@ It is intended for platform teams that need to secure north-south traffic at the
 
 ## Architecture Overview
 
-```
-[External Client]
-      ↓ HTTPS (Public CA)
-[F5 LTM Load Balancer]
-      ↓ mTLS (Venafi-issued certs)
-[Consul API Gateway]
-      ↓ mTLS (Consul Connect)
-[Backend Services]
+```mermaid
+flowchart LR
+    client[External Client]
+    f5[F5 LTM\nEdge TLS termination\nand policy enforcement]
+    gateway[Consul API Gateway\nTrusted cluster ingress]
+    services[Backend Services\nConsul Connect service mesh]
+
+    client -->|HTTPS\nPublic CA| f5
+    f5 -->|mTLS\nVenafi-issued certificates| gateway
+    gateway -->|mTLS\nConsul Connect CA| services
+
+    subgraph edge[Edge Trust Boundary]
+        f5
+    end
+
+    subgraph cluster[Cluster Trust Boundary]
+        gateway
+        services
+    end
 ```
 
 From an operator point of view, this architecture separates trust domains while maintaining a secure request path end to end:
